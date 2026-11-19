@@ -708,21 +708,150 @@
     </g>`;
   }
 
+  function drawPixelFallbackBoardSvg(isDark, box) {
+    const { x, y, w, h } = box;
+    const ink = isDark ? '#e2e8f0' : '#334155';
+    const muted = isDark ? '#94a3b8' : '#64748b';
+    const axis = isDark ? '#475569' : '#94a3b8';
+    const grid = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(38,40,48,0.08)';
+    const divider = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(120,105,86,0.22)';
+
+    const padX = 14;
+    const halfW = Math.round((w - padX * 2 - 18) / 2);
+    const leftX = x + padX;
+    const divX = leftX + halfW + 9;
+    const rightX = divX + 9;
+
+    const plotTop = y + 28;
+    const plotH = h - 42;
+    const baseY = plotTop + plotH;
+
+    // Left: 6-bar pixel histogram
+    const bars = [
+      { ratio: 0.42, color: '#5b6ef5', cap: '#93c5fd' },
+      { ratio: 0.72, color: '#d97757', cap: '#fdba74' },
+      { ratio: 0.54, color: '#10a37f', cap: '#6ee7b7' },
+      { ratio: 0.92, color: '#f59e0b', cap: '#fde68a' },
+      { ratio: 0.66, color: '#2563eb', cap: '#93c5fd' },
+      { ratio: 0.80, color: '#8b5cf6', cap: '#ddd6fe' },
+    ];
+    const barGap = 6;
+    const barW = Math.floor((halfW - 14 - barGap * (bars.length - 1)) / bars.length);
+    const barsSvg = bars.map((b, i) => {
+      const bh = Math.max(8, Math.round(plotH * b.ratio));
+      const bx = leftX + 10 + i * (barW + barGap);
+      const by = baseY - bh;
+      return `<rect x="${bx}" y="${by}" width="${barW}" height="${bh}" fill="${b.color}"/>
+        <rect x="${bx}" y="${by}" width="${barW}" height="3" fill="${b.cap}"/>`;
+    }).join('');
+
+    // Right: crisp pixel line chart with square nodes & stepped fill
+    const ptsNorm = [0.30, 0.56, 0.44, 0.78, 0.64, 0.90, 0.74];
+    const lineCol = isDark ? '#38bdf8' : '#0284c7';
+    const nodeCol = '#f59e0b';
+    const stepX = (halfW - 18) / (ptsNorm.length - 1);
+    const pts = ptsNorm.map((r, i) => ({
+      px: Math.round(rightX + 10 + i * stepX),
+      py: Math.round(baseY - Math.max(8, plotH * r)),
+    }));
+    const areaPts = `${pts[0].px},${baseY} ${pts.map((p) => `${p.px},${p.py}`).join(' ')} ${pts[pts.length - 1].px},${baseY}`;
+    const linePts = pts.map((p) => `${p.px},${p.py}`).join(' ');
+    const nodesSvg = pts.map((p) => `<rect x="${p.px - 2.5}" y="${p.py - 2.5}" width="5" height="5" fill="${nodeCol}" stroke="${isDark ? '#1e222b' : '#ffffff'}" stroke-width="1"/>`).join('');
+
+    const gridYs = [0.25, 0.5, 0.75].map((r) => Math.round(plotTop + plotH * r));
+    const leftGrid = gridYs.map((gy) => `<line x1="${leftX + 4}" y1="${gy}" x2="${leftX + halfW}" y2="${gy}" stroke="${grid}" stroke-width="1" stroke-dasharray="3 3"/>`).join('');
+    const rightGrid = gridYs.map((gy) => `<line x1="${rightX + 4}" y1="${gy}" x2="${rightX + halfW}" y2="${gy}" stroke="${grid}" stroke-width="1" stroke-dasharray="3 3"/>`).join('');
+
+    return `<g shape-rendering="crispEdges">
+      <rect x="${leftX - 2}" y="${y + 6}" width="${halfW + 4}" height="15" rx="2" fill="${isDark ? 'rgba(91,110,245,0.16)' : 'rgba(91,110,245,0.10)'}"/>
+      <text x="${leftX + 3}" y="${y + 17}" font-size="10.5" font-weight="700" fill="${ink}">📊 PIXEL BAR</text>
+      <text x="${leftX + halfW - 2}" y="${y + 17}" text-anchor="end" font-size="9" fill="${muted}">IDLE</text>
+      ${leftGrid}
+      <line x1="${leftX + 4}" y1="${plotTop}" x2="${leftX + 4}" y2="${baseY}" stroke="${axis}" stroke-width="2"/>
+      <line x1="${leftX + 4}" y1="${baseY}" x2="${leftX + halfW}" y2="${baseY}" stroke="${axis}" stroke-width="2"/>
+      ${barsSvg}
+
+      <line x1="${divX}" y1="${y + 8}" x2="${divX}" y2="${y + h - 6}" stroke="${divider}" stroke-width="1" stroke-dasharray="2.5 2.5"/>
+
+      <rect x="${rightX - 2}" y="${y + 6}" width="${halfW + 4}" height="15" rx="2" fill="${isDark ? 'rgba(56,189,248,0.16)' : 'rgba(2,132,199,0.10)'}"/>
+      <text x="${rightX + 3}" y="${y + 17}" font-size="10.5" font-weight="700" fill="${ink}">📈 PIXEL LINE</text>
+      <text x="${rightX + halfW - 2}" y="${y + 17}" text-anchor="end" font-size="9" fill="${muted}">TREND</text>
+      ${rightGrid}
+      <line x1="${rightX + 4}" y1="${plotTop}" x2="${rightX + 4}" y2="${baseY}" stroke="${axis}" stroke-width="2"/>
+      <line x1="${rightX + 4}" y1="${baseY}" x2="${rightX + halfW}" y2="${baseY}" stroke="${axis}" stroke-width="2"/>
+      <polygon points="${areaPts}" fill="${lineCol}" fill-opacity="0.16"/>
+      <polyline points="${linePts}" fill="none" stroke="${lineCol}" stroke-width="2.4" stroke-linejoin="miter"/>
+      ${nodesSvg}
+    </g>`;
+  }
+
   function drawWallWhiteboard(usageHistory, isDark) {
     const bg = isDark ? '#1e222b' : '#fffdf8';
     const frame = isDark ? '#475569' : '#c5bdb0';
     const ink = isDark ? '#e2e8f0' : '#334155';
     const red = isDark ? '#f87171' : '#dc2626';
     const track = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(38,40,48,0.1)';
-    const stats = computeBoardStats(usageHistory);
-    const top3 = stats.ranking.slice(0, 3);
-    const pct = Math.min(1, stats.todayPrompts / stats.avgPrompts);
-    const exceeded = stats.todayPrompts >= stats.avgPrompts;
-
     const bx = 360;
     const by = 64;
     const bw = 200;
     const bh = 56;
+
+    if (!Array.isArray(usageHistory?.days) || usageHistory.days.length === 0) {
+      const axis = isDark ? '#64748b' : '#94a3b8';
+      const grid = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(38,40,48,0.08)';
+      const barBaseY = by + 48;
+      const wallBars = [
+        { x: bx + 18, h: 14, col: '#5b6ef5', cap: '#93c5fd' },
+        { x: bx + 32, h: 24, col: '#d97757', cap: '#fdba74' },
+        { x: bx + 46, h: 18, col: '#10a37f', cap: '#6ee7b7' },
+        { x: bx + 60, h: 31, col: '#f59e0b', cap: '#fde68a' },
+        { x: bx + 74, h: 22, col: '#2563eb', cap: '#93c5fd' },
+      ];
+      const wallBarsSvg = wallBars.map((b) => `<rect x="${b.x}" y="${barBaseY - b.h}" width="10" height="${b.h}" fill="${b.col}"/><rect x="${b.x}" y="${barBaseY - b.h}" width="10" height="2" fill="${b.cap}"/>`).join('');
+
+      const lineCol = isDark ? '#38bdf8' : '#0284c7';
+      const linePts = [
+        [bx + 110, by + 40],
+        [bx + 125, by + 30],
+        [bx + 140, by + 35],
+        [bx + 155, by + 20],
+        [bx + 170, by + 26],
+        [bx + 185, by + 15],
+      ];
+      const polyStr = linePts.map((p) => p.join(',')).join(' ');
+      const areaStr = `${linePts[0][0]},${barBaseY} ${polyStr} ${linePts[linePts.length - 1][0]},${barBaseY}`;
+      const nodesSvg = linePts.map(([px, py]) => `<rect x="${px - 2}" y="${py - 2}" width="4" height="4" fill="#f59e0b"/>`).join('');
+
+      return `<g class="ag-iso-clickable" data-ag-station="board">
+        <title>像素展示白板（点击查看 &amp; 敲锣鼓劲）</title>
+        <rect x="${bx}" y="${by}" width="${bw}" height="${bh}" rx="4" fill="${bg}" stroke="${frame}" stroke-width="1.8"/>
+        <rect x="${bx + 5}" y="${by + 5}" width="4" height="4" rx="1" fill="#dc2626"/>
+        <rect x="${bx + bw - 9}" y="${by + 5}" width="4" height="4" rx="1" fill="#f59e0b"/>
+
+        <g shape-rendering="crispEdges">
+          <line x1="${bx + 14}" y1="${by + 24}" x2="${bx + 88}" y2="${by + 24}" stroke="${grid}" stroke-width="1"/>
+          <line x1="${bx + 14}" y1="${by + 36}" x2="${bx + 88}" y2="${by + 36}" stroke="${grid}" stroke-width="1"/>
+          <line x1="${bx + 14}" y1="${by + 13}" x2="${bx + 14}" y2="${barBaseY}" stroke="${axis}" stroke-width="1.5"/>
+          <line x1="${bx + 14}" y1="${barBaseY}" x2="${bx + 88}" y2="${barBaseY}" stroke="${axis}" stroke-width="1.5"/>
+          ${wallBarsSvg}
+
+          <line x1="${bx + 96}" y1="${by + 10}" x2="${bx + 96}" y2="${by + bh - 8}" stroke="${frame}" stroke-width="1.2" stroke-dasharray="3 3"/>
+
+          <line x1="${bx + 106}" y1="${by + 24}" x2="${bx + 188}" y2="${by + 24}" stroke="${grid}" stroke-width="1"/>
+          <line x1="${bx + 106}" y1="${by + 36}" x2="${bx + 188}" y2="${by + 36}" stroke="${grid}" stroke-width="1"/>
+          <line x1="${bx + 106}" y1="${by + 13}" x2="${bx + 106}" y2="${barBaseY}" stroke="${axis}" stroke-width="1.5"/>
+          <line x1="${bx + 106}" y1="${barBaseY}" x2="${bx + 188}" y2="${barBaseY}" stroke="${axis}" stroke-width="1.5"/>
+          <polygon points="${areaStr}" fill="${lineCol}" fill-opacity="0.16"/>
+          <polyline points="${polyStr}" fill="none" stroke="${lineCol}" stroke-width="2" shape-rendering="auto"/>
+          ${nodesSvg}
+        </g>
+      </g>`;
+    }
+
+    const stats = computeBoardStats(usageHistory);
+    const top3 = stats.ranking.slice(0, 3);
+    const pct = Math.min(1, stats.todayPrompts / stats.avgPrompts);
+    const exceeded = stats.todayPrompts >= stats.avgPrompts;
 
     // Pure pixel-art wall board: Left = 3-step pixel podium (top 3 colors + tiny crown); Right = big pixel order number + tiny gong + simple bar
     const c1 = top3[0]?.color || '#7c3aed';
@@ -1024,13 +1153,19 @@
   function buildPopoverHtml(stationKey, stationMap, bgTasks, usageHistory, quotas, isDark) {
     if (!stationKey) return '';
     if (stationKey === 'board') {
+      const hasHistory = Boolean(usageHistory?.days?.length);
       const stats = computeBoardStats(usageHistory);
-      const chartSvg = usageHistory?.days?.length
+      const chartSvg = hasHistory
         ? `<svg viewBox="0 0 364 128" style="width:100%;height:auto;display:block;">${drawSalesBoardSvg(usageHistory, isDark, { x: 0, y: 0, w: 364, h: 128, compact: false })}</svg>`
-        : `<div class="ag-pop-empty">未检测到 ~/.config/howmanyusage/usage-history.json</div>`;
+        : `<svg viewBox="0 0 364 128" style="width:100%;height:auto;display:block;">${drawPixelFallbackBoardSvg(isDark, { x: 0, y: 0, w: 364, h: 128 })}</svg>`;
+      const footHtml = hasHistory
+        ? `<span>本周销冠：👑 <strong style="color:var(--ag-of-ink);">${escHtml(stats.champion?.full || '—')}</strong></span>
+           <span>7日累计开单 <strong style="color:var(--ag-of-ink);">${stats.weekPrompts}</strong> 单</span>`
+        : `<span>像素展示白板</span>
+           <span>接入 howmanyusage 可解锁实时榜</span>`;
       return `<div class="ag-office-popover">
         <div class="ag-pop-head">
-          <span class="ag-pop-title">🏆 门店销冠龙虎榜 &amp; 今日喜报</span>
+          <span class="ag-pop-title">${hasHistory ? '🏆 门店销冠龙虎榜 &amp; 今日喜报' : '📊 像素趋势白板'}</span>
           <div class="ag-pop-actions">
             <button type="button" class="ag-pop-btn primary" data-ag-gong="1">🔔 敲锣鼓劲</button>
             <button type="button" class="ag-pop-btn" data-ag-close-pop="1">关闭</button>
@@ -1039,8 +1174,7 @@
         <div class="ag-pop-body">
           ${chartSvg}
           <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--ag-of-muted);padding:2px 6px 0;">
-            <span>本周销冠：👑 <strong style="color:var(--ag-of-ink);">${escHtml(stats.champion?.full || '—')}</strong></span>
-            <span>7日累计开单 <strong style="color:var(--ag-of-ink);">${stats.weekPrompts}</strong> 单</span>
+            ${footHtml}
           </div>
         </div>
       </div>`;
@@ -1173,16 +1307,23 @@
 
     let child = targetBox;
     let host = targetBox.parentElement;
+    let fallbackMount = null;
     for (let i = 0; i < 8 && host && host !== document.body; i++) {
       const style = getComputedStyle(host);
       const r = host.getBoundingClientRect();
-      if (r.height >= 360 && r.width >= 480 && ((style.display === 'flex' && style.flexDirection === 'column') || style.overflowY === 'auto' || style.overflowY === 'scroll')) {
-        return { host, afterEl: child };
+      if (r.height >= 360 && r.width >= 480) {
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+          return { host, afterEl: child };
+        }
+        if (style.display === 'flex' && style.flexDirection === 'column') {
+          // Prefer outermost flex-column container so multi-line input never hijacks mount host
+          fallbackMount = { host, afterEl: child };
+        }
       }
       child = host;
       host = host.parentElement;
     }
-    return null;
+    return fallbackMount;
   }
 
   function syncStudio() {
@@ -1237,8 +1378,14 @@
     if (!mount.host.classList.contains('ag-lite-studio-host')) {
       mount.host.classList.add('ag-lite-studio-host');
     }
+    document.querySelectorAll('.ag-lite-studio-host').forEach((n) => {
+      if (n !== mount.host) n.classList.remove('ag-lite-studio-host');
+    });
 
     let root = mount.host.querySelector(':scope > .ag-lite-office');
+    document.querySelectorAll('.ag-lite-office').forEach((n) => {
+      if (n !== root) n.remove();
+    });
     if (!root) {
       root = document.createElement('section');
       root.className = 'ag-lite-office';
