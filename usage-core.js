@@ -1,6 +1,7 @@
 (function (root, factory) {
-  if (typeof module === 'object' && module.exports) module.exports = factory();
-  else root.__agCsUsageCore = factory();
+  const exported = factory();
+  if (typeof module === 'object' && module.exports) module.exports = exported;
+  if (root) root.__agCsUsageCore = exported;
 })(typeof globalThis !== 'undefined' ? globalThis : window, function () {
   const HOME_HEAT_WEEKS = 26;
   const HOME_HEAT_RAMP = [8, 28, 52, 76, 100];
@@ -645,6 +646,7 @@
     let peakSpeed = 0;
     let sustainedPeakSpeed = 0;
     let latestCw = null;
+    let latestCwMax = 0;
     let latestChatStart = null;
     let latestBreakdown = null;
     let latestBudgets = null;
@@ -676,7 +678,12 @@
       const cs = val.chatStartMetadata;
       const cwMeta = cs?.contextWindowMetadata;
       if (cs) latestChatStart = cs;
-      if (cwMeta && (cwMeta.estimatedTokensUsed || cwMeta.maxContextTokens)) {
+      if (cwMeta && Number(cwMeta.maxContextTokens || 0) > 0) {
+        latestCwMax = Number(cwMeta.maxContextTokens);
+      }
+      if (cwMeta && Number(cwMeta.estimatedTokensUsed || 0) > 0) {
+        latestCw = cwMeta;
+      } else if (!latestCw && cwMeta && cwMeta.maxContextTokens) {
         latestCw = cwMeta;
       }
       if (cwMeta?.tokenBreakdown?.groups?.length) {
@@ -747,6 +754,7 @@
     }
 
     const maxContextTokens =
+      latestCwMax ||
       Number(latestCw?.maxContextTokens || 0) ||
       Number(known.maxContextTokens || 0) ||
       256000;
@@ -1077,7 +1085,7 @@
         customizationTokenBudget: known.customizationTokenBudget || 20000,
         rulesTokenBudget: known.rulesTokenBudget || 20000,
       },
-      hasActiveLimits: Boolean(latestCw?.maxContextTokens && sysTokens > 0),
+      hasActiveLimits: Boolean((latestCwMax || latestCw?.maxContextTokens) && sysTokens > 0),
       isRunning,
       isThinking,
       hasError,

@@ -23,6 +23,16 @@ function getPort() {
   return first || null;
 }
 
+function isAllowedTargetUrl(rawUrl) {
+  if (!rawUrl) return false;
+  try {
+    const u = new URL(rawUrl);
+    return u.protocol === 'https:' && u.hostname === '127.0.0.1' && !u.username && !u.password;
+  } catch {
+    return false;
+  }
+}
+
 function buildInjectExpr() {
   const css = fs.readFileSync(STYLE_PATH, 'utf8');
   const usageJs = fs.readFileSync(USAGE_PATH, 'utf8');
@@ -37,7 +47,7 @@ function buildInjectExpr() {
     st.textContent = ${JSON.stringify(css)};
     ${usageJs}
     ${runtimeJs}
-    return 'ok';
+    return typeof window.__agLiteHudDestroy === 'function' ? 'ok' : 'no-destroy';
   })()`;
 }
 
@@ -47,25 +57,50 @@ const REMOVE_EXPR = `(() => {
   }
   const st = document.getElementById('ag-lite-hud-style');
   if (st) st.remove();
+  document.querySelectorAll('.ag-lite-bottom-bar, .ag-lite-context-ring, .ag-lite-metrics, .ag-lite-studio, .ag-lite-office').forEach((n) => n.remove());
+  document.querySelectorAll('.ag-lite-studio-host').forEach((n) => n.classList.remove('ag-lite-studio-host'));
+  try { delete window.__agLiteExternalAgents; } catch {}
+  try { delete window.__agCsUsageCore; } catch {}
   return 'removed';
 })()`;
 
 async function evalCdp(wsUrl, expression) {
   const ws = new WebSocket(wsUrl);
   await new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error('ws timeout')), 4000);
+    const t = setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error('ws timeout'));
+    }, 4000);
     ws.onopen = () => { clearTimeout(t); resolve(); };
-    ws.onerror = (e) => { clearTimeout(t); reject(e); };
+    ws.onerror = (e) => {
+      clearTimeout(t);
+      try { ws.close(); } catch {}
+      reject(e);
+    };
   });
   return new Promise((resolve, reject) => {
-    const t = setTimeout(() => { try { ws.close(); } catch {} reject(new Error('eval timeout')); }, 5000);
+    const t = setTimeout(() => {
+      try { ws.close(); } catch {}
+      reject(new Error('eval timeout'));
+    }, 5000);
     ws.onmessage = (ev) => {
-      const msg = JSON.parse(ev.data);
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.id === 1) {
         clearTimeout(t);
         try { ws.close(); } catch {}
+        if (msg.result?.exceptionDetails) {
+          const desc = msg.result.exceptionDetails.exception?.description || msg.result.exceptionDetails.text || 'CDP eval exception';
+          reject(new Error(desc));
+          return;
+        }
         resolve(msg.result?.result?.value);
       }
+    };
+    ws.onerror = (e) => {
+      clearTimeout(t);
+      try { ws.close(); } catch {}
+      reject(e);
     };
     ws.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression, returnByValue: true } }));
   });
@@ -74,6 +109,8 @@ async function evalCdp(wsUrl, expression) {
 let lastSig = '';
 let lastSpeedJson = '';
 let lastOfficeJson = '';
+let cachedExpr = '';
+let ticking = false;
 const injectedTargets = new Map();
 const officePushedTargets = new Map();
 
@@ -98,67 +135,96 @@ function mergeAndWriteSpeedSamples(incoming) {
     .slice(0, 200);
   const out = JSON.stringify({ samples: merged }, null, 2) + '\n';
   if (out === lastSpeedJson) return;
-  lastSpeedJson = out;
-  fs.mkdirSync(path.dirname(SPEED_PATH), { recursive: true });
+  fs.mkdirSync(path.dirname(SPEED_PATH), { recursive: true, mode: 0o700 });
   const tmp = `${SPEED_PATH}.tmp`;
-  fs.writeFileSync(tmp, out, 'utf8');
+  fs.writeFileSync(tmp, out, { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, SPEED_PATH);
+  lastSpeedJson = out;
 }
 
 async function tick() {
-  const port = getPort();
-  if (!port) return;
-  let targets;
+  if (ticking) return;
+  ticking = true;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/list`);
-    targets = await res.json();
-  } catch {
-    return;
-  }
-  const pages = targets.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl && t.url?.startsWith('https://127.0.0.1'));
-
-  if (REMOVE) {
-    for (const p of pages) {
-      try { await evalCdp(p.webSocketDebuggerUrl, REMOVE_EXPR); } catch {}
-    }
-    return;
-  }
-
-  const sig = [STYLE_PATH, USAGE_PATH, RUNTIME_PATH, COLLECTOR_PATH]
-    .filter((f) => fs.existsSync(f))
-    .map((f) => fs.statSync(f).mtimeMs)
-    .join(':');
-  const changed = sig !== lastSig;
-  lastSig = sig;
-  const expr = buildInjectExpr();
-
-  const officeSnap = await getExternalAgentsSnapshot(ONCE ? 0 : 8000);
-  const officeJson = JSON.stringify(officeSnap);
-  if (officeJson !== lastOfficeJson) {
-    lastOfficeJson = officeJson;
-  }
-
-  for (const p of pages) {
+    const port = getPort();
+    if (!port) return;
+    let targets;
     try {
-      const alive = await evalCdp(p.webSocketDebuggerUrl, `Boolean(document.getElementById('ag-lite-hud-style') && typeof window.__agLiteHudDestroy === 'function')`);
-      if (!alive || changed || injectedTargets.get(p.id) !== sig) {
-        await evalCdp(p.webSocketDebuggerUrl, expr);
-        injectedTargets.set(p.id, sig);
-        officePushedTargets.delete(p.id);
-        console.log(`[${new Date().toISOString()}] injected: ${p.title}`);
+      const res = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (!res.ok) return;
+      targets = await res.json();
+    } catch {
+      return;
+    }
+    if (!Array.isArray(targets)) return;
+    const pages = targets.filter((t) => t && t.type === 'page' && t.webSocketDebuggerUrl && isAllowedTargetUrl(t.url));
+
+    if (REMOVE) {
+      for (const p of pages) {
+        try { await evalCdp(p.webSocketDebuggerUrl, REMOVE_EXPR); } catch {}
       }
-      if (officePushedTargets.get(p.id) !== lastOfficeJson) {
-        await evalCdp(
-          p.webSocketDebuggerUrl,
-          `(() => { window.__agLiteExternalAgents = ${lastOfficeJson}; if (typeof window.__agLiteRefreshOffice === 'function') window.__agLiteRefreshOffice(); return 'ok'; })()`
-        );
-        officePushedTargets.set(p.id, lastOfficeJson);
+      return;
+    }
+
+    const activeIds = new Set(pages.map((p) => p.id));
+    for (const id of injectedTargets.keys()) {
+      if (!activeIds.has(id)) injectedTargets.delete(id);
+    }
+    for (const id of officePushedTargets.keys()) {
+      if (!activeIds.has(id)) officePushedTargets.delete(id);
+    }
+    if (pages.length === 0) return;
+
+    const sig = [STYLE_PATH, USAGE_PATH, RUNTIME_PATH, COLLECTOR_PATH]
+      .filter((f) => fs.existsSync(f))
+      .map((f) => fs.statSync(f).mtimeMs)
+      .join(':');
+    const changed = sig !== lastSig;
+    if (changed || !cachedExpr) {
+      lastSig = sig;
+      cachedExpr = buildInjectExpr();
+    }
+
+    const officeSnap = await getExternalAgentsSnapshot(ONCE ? 0 : 8000);
+    const { collectedAt: _ignoredTs, ...officePayload } = officeSnap || {};
+    const officeJson = JSON.stringify(officePayload);
+    if (officeJson !== lastOfficeJson) {
+      lastOfficeJson = officeJson;
+    }
+
+    for (const p of pages) {
+      try {
+        const alive = await evalCdp(p.webSocketDebuggerUrl, `Boolean(document.getElementById('ag-lite-hud-style') && typeof window.__agLiteHudDestroy === 'function')`);
+        if (!alive || changed || injectedTargets.get(p.id) !== sig) {
+          const status = await evalCdp(p.webSocketDebuggerUrl, cachedExpr);
+          if (status === 'ok') {
+            injectedTargets.set(p.id, sig);
+            officePushedTargets.delete(p.id);
+            console.log(`[${new Date().toISOString()}] injected: ${p.title || p.id}`);
+          } else {
+            console.error(`[${new Date().toISOString()}] inject skipped (${status}): ${p.id}`);
+            continue;
+          }
+        }
+        if (officePushedTargets.get(p.id) !== lastOfficeJson) {
+          await evalCdp(
+            p.webSocketDebuggerUrl,
+            `(() => { window.__agLiteExternalAgents = ${lastOfficeJson}; if (typeof window.__agLiteRefreshOffice === 'function') window.__agLiteRefreshOffice(); return 'ok'; })()`
+          );
+          officePushedTargets.set(p.id, lastOfficeJson);
+        }
+        const samples = await evalCdp(p.webSocketDebuggerUrl, `window.__agLiteSpeedSamples || null`);
+        if (Array.isArray(samples) && samples.length) {
+          mergeAndWriteSpeedSamples(samples);
+        }
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] target error (${p.id}): ${err?.message || err}`);
       }
-      const samples = await evalCdp(p.webSocketDebuggerUrl, `window.__agLiteSpeedSamples || null`);
-      if (Array.isArray(samples) && samples.length) {
-        mergeAndWriteSpeedSamples(samples);
-      }
-    } catch {}
+    }
+  } catch (err) {
+    console.error(`[${new Date().toISOString()}] tick error: ${err?.message || err}`);
+  } finally {
+    ticking = false;
   }
 }
 

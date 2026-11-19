@@ -28,14 +28,16 @@ English | [简体中文](README.zh-CN.md)
 
 ## Optional Local Integrations
 
-`agy-lite-hud` works standalone out of the box and gracefully skips any missing local source:
+`agy-lite-hud` works standalone out of the box (showing a decorative pixel bar & line chart on the wall whiteboard when `howmanyusage` is not installed) and skips any missing external session source:
 
 | Integration | Local Source | What It Enables |
 |---|---|---|
 | **Claude Code** | `~/.claude/projects` | Live & recent Claude sessions on the Claude desk |
 | **Codex CLI** | `~/.codex/sessions` | Live & recent Codex threads on the ChatGPT desk |
 | **DSH** | `~/.agents/skills/dsh-session-bridge` | DSH sessions on the DeepSeek desk |
-| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | Desk stamina blocks, strike alerts, Colab CU on the server rack, and wall leaderboard |
+| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | Desk stamina blocks, strike alerts, Colab CU on the server rack, and live wall leaderboard |
+
+> Note: The in-app Pixel Agent Office UI copy is currently in Simplified Chinese.
 
 ## Quick Start
 
@@ -64,7 +66,7 @@ node watcher.mjs --remove   # remove injected DOM and styles
 
 ## Disclaimer
 
-This project injects local CSS/JS into your running Antigravity desktop client via Chrome DevTools Protocol (`127.0.0.1`) and reads only local session/state files on your Mac. Zero telemetry, zero external network requests. Internal DOM selectors and store shapes may change with Antigravity updates.
+This project injects local CSS/JS into your running Antigravity desktop client via Chrome DevTools Protocol (`127.0.0.1`), reads local session/state files on your Mac, and writes only local speed samples (`~/.config/howmanyusage/agy-speed.json`) plus `watcher.log`. Zero telemetry, zero external network requests. Internal DOM selectors and store shapes may change with Antigravity updates.
 
 ## License
 

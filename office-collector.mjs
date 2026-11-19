@@ -11,6 +11,10 @@ const RUNNING_WINDOW_MS = 45 * 1000;
 
 const dshReplyCache = new Map(); // sessionId -> { asOfSeq, lastReply }
 
+function shQuote(val) {
+  return `'${String(val || '').replace(/'/g, `'\\''`)}'`;
+}
+
 function cleanText(raw, maxLen = 220) {
   if (!raw) return '';
   const s = String(raw)
@@ -147,8 +151,8 @@ function collectClaude() {
       const running = (now - f.mtimeMs) < RUNNING_WINDOW_MS && !ended;
       const project = projectFromCwd(cwd, 'Claude');
       const continueCmd = cwd
-        ? `cd ${JSON.stringify(cwd)} && claude --resume ${id}`
-        : `claude --resume ${id}`;
+        ? `cd -- ${shQuote(cwd)} && claude --resume ${shQuote(id)}`
+        : `claude --resume ${shQuote(id)}`;
 
       items.push({
         id,
@@ -255,7 +259,7 @@ function collectCodex() {
         waiting: false,
         updatedAt: Math.round(f.mtimeMs / 1000),
         lastReply: lastReply || (running ? '正在执行中…' : '暂无文字回复摘要'),
-        continueCmd: `codex resume ${id}`,
+        continueCmd: `codex resume ${shQuote(id)}`,
       });
     } catch {}
   }
@@ -267,7 +271,7 @@ async function collectDsh() {
   if (!fs.existsSync(script)) return [];
   let rawList;
   try {
-    const { stdout } = await execFileAsync(process.execPath, [script, 'list', '--limit', '10', '--json'], { timeout: 3500 });
+    const { stdout } = await execFileAsync(process.execPath, [script, 'list', '--limit', '10', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
     rawList = JSON.parse(stdout);
   } catch {
     return [];
@@ -286,7 +290,7 @@ async function collectDsh() {
       lastReply = cached.lastReply;
     } else if (items.length < 5) {
       try {
-        const { stdout } = await execFileAsync(process.execPath, [script, 'read', id, '--limit', '4', '--json'], { timeout: 3500 });
+        const { stdout } = await execFileAsync(process.execPath, [script, 'read', id, '--limit', '4', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
         const data = JSON.parse(stdout);
         const msgs = Array.isArray(data) ? data : (data?.messages || data?.items || []);
         for (let i = msgs.length - 1; i >= 0; i--) {
@@ -296,6 +300,9 @@ async function collectDsh() {
             const txt = cleanText(m.text || m.content || extractTextBlocks(m.parts), 240);
             if (txt) { lastReply = txt; break; }
           }
+        }
+        if (dshReplyCache.size >= 100) {
+          dshReplyCache.delete(dshReplyCache.keys().next().value);
         }
         dshReplyCache.set(id, { asOfSeq: s.asOfSeq, lastReply });
       } catch {}
@@ -309,7 +316,7 @@ async function collectDsh() {
       waiting: false,
       updatedAt: Math.round((s.updatedAt || Date.now()) / 1000),
       lastReply: lastReply || (s.running ? '正在执行中…' : '点击可复制续写命令'),
-      continueCmd: `node ~/.agents/skills/dsh-session-bridge/scripts/dsh-session.mjs send ${id} "继续"`,
+      continueCmd: `node ~/.agents/skills/dsh-session-bridge/scripts/dsh-session.mjs send ${shQuote(id)} "继续"`,
     });
   }
   return items;

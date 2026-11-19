@@ -8,6 +8,9 @@
   if (!usageCore) return;
 
   let destroyed = false;
+  const instanceToken = Symbol('agLiteHud');
+  window.__agLiteHudToken = instanceToken;
+  const isStaleInstance = () => destroyed || window.__agLiteHudToken !== instanceToken;
   let cachedSvc = null;
   let cachedStore = null;
   let cachedRouter = null;
@@ -22,8 +25,11 @@
   let saluteTimer = null;
   let lastStationMap = null;
 
-  const trajCache = new Map();
-  const knownModelMaxCtx = new Map();
+  const trajCache = window.__agLiteTrajCache instanceof Map ? window.__agLiteTrajCache : (window.__agLiteTrajCache = new Map());
+  for (const e of trajCache.values()) {
+    if (e) e.fetching = false;
+  }
+  const knownModelMaxCtx = window.__agLiteModelMaxCtx instanceof Map ? window.__agLiteModelMaxCtx : (window.__agLiteModelMaxCtx = new Map());
 
   function ensureHooks(allowPartial = false) {
     if (cachedSvc && cachedStore && cachedRouter) return { svc: cachedSvc, store: cachedStore, router: cachedRouter };
@@ -49,10 +55,10 @@
     }
     if (cachedStore && !storeUnsub) {
       storeUnsub = cachedStore.subscribe(() => {
-        if (destroyed || storeDebounce) return;
+        if (isStaleInstance() || storeDebounce) return;
         storeDebounce = setTimeout(() => {
           storeDebounce = null;
-          if (!destroyed) syncAll();
+          safeSyncAll();
         }, 400);
       });
     }
@@ -95,20 +101,31 @@
     return trimmed ? Math.ceil(trimmed.length / 4) : 0;
   }
 
+  function readSummaryInfo(st, cascadeId) {
+    const allSummaries = st?.trajectorySummaries?.summaries || st?.cascadeTrajectorySummaries || {};
+    const sumEntry = allSummaries[cascadeId];
+    const sum = sumEntry && typeof sumEntry.summary === 'object' && sumEntry.summary !== null
+      ? sumEntry.summary
+      : (sumEntry || {});
+    return {
+      stepCount: Number(sum?.stepCount || 0),
+      lastMod: Number(sum?.lastModifiedTime?.seconds || 0),
+      running: Boolean(sum?.notFullyIdle || sum?.hasActivity || sum?.status === 2 || sum?.hasRunningSubagents),
+    };
+  }
+
   async function fetchActiveConvo(cascadeId) {
     if (!cascadeId) return null;
     const h = ensureHooks();
     if (!h) return null;
     const st = h.store.getState();
-    const allSummaries = st.trajectorySummaries?.summaries || st.cascadeTrajectorySummaries || {};
-    const sumEntry = allSummaries[cascadeId];
-    const sum = sumEntry?.summary || sumEntry || {};
-    const stepCount = Number(sum?.stepCount || 0);
-    const lastMod = Number(sum?.lastModifiedTime?.seconds || 0);
-    const running = !!(sum?.notFullyIdle || sum?.hasActivity || sum?.status === 2 || sum?.hasRunningSubagents);
+    const { stepCount, lastMod, running } = readSummaryInfo(st, cascadeId);
 
     let entry = trajCache.get(cascadeId);
     if (!entry) {
+      if (trajCache.size >= 100) {
+        trajCache.delete(trajCache.keys().next().value);
+      }
       entry = { fetching: false, lastStep: -1, lastMod: -1, lastRunning: false, lastAt: 0, data: null };
       trajCache.set(cascadeId, entry);
     }
@@ -123,6 +140,9 @@
     try {
       const res = await h.svc.getCascadeTrajectory({ cascadeId });
       const analyzed = usageCore.analyzeActiveConversation(res, { cascadeId });
+      if (entry.data && entry.data.calls > 0 && (!analyzed || (analyzed.calls === 0 && stepCount > 0))) {
+        return entry.data;
+      }
       if (analyzed && analyzed.maxContextTokens > 0 && analyzed.hasActiveLimits && analyzed.lastModel) {
         knownModelMaxCtx.set(analyzed.lastModel.toLowerCase(), analyzed.maxContextTokens);
       }
@@ -329,7 +349,10 @@
       let project = cidToProject.get(cid) || '';
       if (!project) {
         const uri = (s.workspaces || []).map((w) => w.workspaceFolderAbsoluteUri || '').find(Boolean) || '';
-        if (uri) project = decodeURIComponent(uri.replace(/\/+$/, '').split('/').pop() || '');
+        if (uri) {
+          const seg = uri.replace(/\/+$/, '').split('/').pop() || '';
+          try { project = decodeURIComponent(seg); } catch { project = seg; }
+        }
       }
       if (!project) project = '独立对话';
 
@@ -442,9 +465,6 @@
       if (resolveCascadeId(ib)) continue;
       const ed = ib.querySelector('[contenteditable="true"], textarea');
       if (ed) { editor = ed; break; }
-    }
-    if (!editor) {
-      editor = document.querySelector('[data-testid="agent-input-box"] [contenteditable="true"], [data-testid="agent-input-box"] textarea');
     }
     if (!editor) return false;
 
@@ -1161,8 +1181,8 @@
       const footHtml = hasHistory
         ? `<span>本周销冠：👑 <strong style="color:var(--ag-of-ink);">${escHtml(stats.champion?.full || '—')}</strong></span>
            <span>7日累计开单 <strong style="color:var(--ag-of-ink);">${stats.weekPrompts}</strong> 单</span>`
-        : `<span>像素展示白板</span>
-           <span>接入 howmanyusage 可解锁实时榜</span>`;
+        : `<span>示意像素白板（未检测到 howmanyusage）</span>
+           <span>接入后解锁实时榜</span>`;
       return `<div class="ag-office-popover">
         <div class="ag-pop-head">
           <span class="ag-pop-title">${hasHistory ? '🏆 门店销冠龙虎榜 &amp; 今日喜报' : '📊 像素趋势白板'}</span>
@@ -1579,7 +1599,7 @@
   window.__agLiteRefreshOffice = syncStudio;
 
   function syncAll() {
-    if (destroyed) return;
+    if (isStaleInstance()) return;
     document.querySelectorAll('.ag-lite-bottom-bar, .ag-lite-metrics').forEach((n) => n.remove());
     const footers = document.querySelectorAll('.agy-composer-footer');
     for (const footer of footers) {
@@ -1591,9 +1611,17 @@
         continue;
       }
       const cached = trajCache.get(cid)?.data || null;
-      renderWidgets(footer, card, cached);
+      if (cached) {
+        renderWidgets(footer, card, cached);
+      } else {
+        const h = ensureHooks(true);
+        const stepCount = h?.store ? readSummaryInfo(h.store.getState(), cid).stepCount : 0;
+        if (stepCount === 0) {
+          renderWidgets(footer, card, null);
+        }
+      }
       fetchActiveConvo(cid).then((fresh) => {
-        if (!destroyed && fresh && footer.isConnected) {
+        if (!isStaleInstance() && fresh && footer.isConnected && resolveCascadeId(ib) === cid) {
           renderWidgets(footer, card, fresh);
         }
       });
@@ -1601,20 +1629,16 @@
     syncStudio();
   }
 
-  mutObs = new MutationObserver(() => {
-    if (destroyed || mutDebounce) return;
-    mutDebounce = setTimeout(() => {
-      mutDebounce = null;
-      if (!destroyed) syncAll();
-    }, 250);
-  });
-  mutObs.observe(document.body, { childList: true, subtree: true });
-
-  pollTimer = setInterval(syncAll, 2500);
-  syncAll();
+  const safeSyncAll = () => {
+    if (isStaleInstance()) return;
+    try { syncAll(); } catch {}
+  };
 
   window.__agLiteHudDestroy = () => {
     destroyed = true;
+    if (window.__agLiteHudToken === instanceToken) {
+      delete window.__agLiteHudToken;
+    }
     if (pollTimer) clearInterval(pollTimer);
     if (storeDebounce) clearTimeout(storeDebounce);
     if (mutDebounce) clearTimeout(mutDebounce);
@@ -1627,4 +1651,16 @@
     delete window.__agLiteSpeedSamples;
     delete window.__agLiteHudDestroy;
   };
+
+  mutObs = new MutationObserver(() => {
+    if (isStaleInstance() || mutDebounce) return;
+    mutDebounce = setTimeout(() => {
+      mutDebounce = null;
+      safeSyncAll();
+    }, 250);
+  });
+  mutObs.observe(document.body, { childList: true, subtree: true });
+
+  pollTimer = setInterval(safeSyncAll, 2500);
+  safeSyncAll();
 })();

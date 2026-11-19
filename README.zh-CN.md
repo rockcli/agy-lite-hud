@@ -28,14 +28,14 @@
 
 ## 可选本地联动
 
-`agy-lite-hud` 可独立开箱即用，未安装的本地数据源会自动跳过、不报错：
+`agy-lite-hud` 可独立开箱即用：未安装 `howmanyusage` 时，墙面默认展示像素柱状图与折线图示意；未安装的外部会话源会自动跳过：
 
 | 联动工具 | 读取的本地路径 | 增强效果 |
 |---|---|---|
 | **Claude Code** | `~/.claude/projects` | 在 Claude 工位展示近期/运行中会话 |
 | **Codex CLI** | `~/.codex/sessions` | 在 ChatGPT 工位展示近期/运行中线程 |
 | **DSH** | `~/.agents/skills/dsh-session-bridge` | 在 DeepSeek 工位展示 DSH 会话 |
-| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | 桌面体力积木、额度耗尽罢工提醒、机房 Colab CU 与墙面销冠榜 |
+| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | 桌面体力积木、额度耗尽罢工提醒、机房 Colab CU 与墙面实时销冠榜 |
 
 ## 快速开始
 
@@ -64,7 +64,7 @@ node watcher.mjs --remove   # 卸载已注入的 DOM 与样式
 
 ## 免责声明
 
-本工具仅通过本机 Chrome DevTools Protocol（`127.0.0.1`）向运行中的 Antigravity 桌面端注入本地样式与脚本，并只读本地会话与状态文件；无遥测、无外部网络请求。内部 DOM 选择器与前端 Store 结构可能随 Antigravity 版本更新而变化。
+本工具仅通过本机 Chrome DevTools Protocol（`127.0.0.1`）向运行中的 Antigravity 桌面端注入本地样式与脚本，读取本机已有会话与状态文件，并在本地记录测速样本（`~/.config/howmanyusage/agy-speed.json`）与 `watcher.log`；无遥测、无外部网络请求。内部 DOM 选择器与前端 Store 结构可能随 Antigravity 版本更新而变化。
 
 ## 许可证
 
