@@ -646,7 +646,7 @@
     let peakSpeed = 0;
     let sustainedPeakSpeed = 0;
     let latestCw = null;
-    let latestCwMax = 0;
+    let fallbackCw = null;
     let latestChatStart = null;
     let latestBreakdown = null;
     let latestBudgets = null;
@@ -678,13 +678,10 @@
       const cs = val.chatStartMetadata;
       const cwMeta = cs?.contextWindowMetadata;
       if (cs) latestChatStart = cs;
-      if (cwMeta && Number(cwMeta.maxContextTokens || 0) > 0) {
-        latestCwMax = Number(cwMeta.maxContextTokens);
-      }
       if (cwMeta && Number(cwMeta.estimatedTokensUsed || 0) > 0) {
         latestCw = cwMeta;
-      } else if (!latestCw && cwMeta && cwMeta.maxContextTokens) {
-        latestCw = cwMeta;
+      } else if (cwMeta && Number(cwMeta.maxContextTokens || 0) > 0) {
+        fallbackCw = cwMeta;
       }
       if (cwMeta?.tokenBreakdown?.groups?.length) {
         latestBreakdown = cwMeta.tokenBreakdown;
@@ -753,12 +750,12 @@
       }
     }
 
+    const activeCw = latestCw || fallbackCw;
     const maxContextTokens =
-      latestCwMax ||
-      Number(latestCw?.maxContextTokens || 0) ||
+      Number(activeCw?.maxContextTokens || 0) ||
       Number(known.maxContextTokens || 0) ||
       256000;
-    const contextUsed = Number(latestCw?.estimatedTokensUsed || 0);
+    const contextUsed = Number(activeCw?.estimatedTokensUsed || 0);
     const contextRemaining = Math.max(0, maxContextTokens - contextUsed);
     const contextPct = maxContextTokens > 0 ? Math.min(100, (contextUsed / maxContextTokens) * 100) : 0;
     const contextRemainingPct =
@@ -1085,7 +1082,7 @@
         customizationTokenBudget: known.customizationTokenBudget || 20000,
         rulesTokenBudget: known.rulesTokenBudget || 20000,
       },
-      hasActiveLimits: Boolean((latestCwMax || latestCw?.maxContextTokens) && sysTokens > 0),
+      hasActiveLimits: Boolean(activeCw?.maxContextTokens && sysTokens > 0),
       isRunning,
       isThinking,
       hasError,

@@ -98,7 +98,10 @@
     const editor = card?.querySelector('[contenteditable="true"], textarea');
     const txt = editor ? (editor.value !== undefined ? editor.value : editor.innerText || '') : '';
     const trimmed = txt.trim();
-    return trimmed ? Math.ceil(trimmed.length / 4) : 0;
+    if (!trimmed) return 0;
+    return typeof usageCore.estimateTextTokens === 'function'
+      ? usageCore.estimateTextTokens(trimmed)
+      : Math.ceil(trimmed.length / 4);
   }
 
   function readSummaryInfo(st, cascadeId) {
@@ -115,9 +118,9 @@
   }
 
   async function fetchActiveConvo(cascadeId) {
-    if (!cascadeId) return null;
-    const h = ensureHooks();
-    if (!h) return null;
+    if (!cascadeId || isStaleInstance()) return null;
+    const h = ensureHooks(true);
+    if (!h?.svc || !h?.store) return null;
     const st = h.store.getState();
     const { stepCount, lastMod, running } = readSummaryInfo(st, cascadeId);
 
@@ -126,7 +129,7 @@
       if (trajCache.size >= 100) {
         trajCache.delete(trajCache.keys().next().value);
       }
-      entry = { fetching: false, lastStep: -1, lastMod: -1, lastRunning: false, lastAt: 0, data: null };
+      entry = { fetching: false, gen: 0, lastStep: -1, lastMod: -1, lastRunning: false, lastAt: 0, data: null };
       trajCache.set(cascadeId, entry);
     }
     if (entry.fetching) return entry.data;
@@ -137,13 +140,22 @@
     if (!changed && now - entry.lastAt < minMs) return entry.data;
 
     entry.fetching = true;
+    const myGen = (entry.gen = (entry.gen || 0) + 1);
     try {
       const res = await h.svc.getCascadeTrajectory({ cascadeId });
+      if (isStaleInstance() || entry.gen !== myGen) return entry.data;
       const analyzed = usageCore.analyzeActiveConversation(res, { cascadeId });
       if (entry.data && entry.data.calls > 0 && (!analyzed || (analyzed.calls === 0 && stepCount > 0))) {
+        entry.lastStep = stepCount;
+        entry.lastMod = lastMod;
+        entry.lastRunning = running;
+        entry.lastAt = Date.now();
         return entry.data;
       }
       if (analyzed && analyzed.maxContextTokens > 0 && analyzed.hasActiveLimits && analyzed.lastModel) {
+        if (knownModelMaxCtx.size >= 40) {
+          knownModelMaxCtx.delete(knownModelMaxCtx.keys().next().value);
+        }
         knownModelMaxCtx.set(analyzed.lastModel.toLowerCase(), analyzed.maxContextTokens);
       }
       if (analyzed && Array.isArray(analyzed.callList)) {
@@ -165,7 +177,7 @@
             completedAt,
           });
         }
-        window.__agLiteSpeedSamples = samples;
+        window.__agLiteSpeedSamples = samples.slice(-60);
       }
       entry.data = analyzed;
       entry.lastStep = stepCount;
@@ -174,13 +186,18 @@
       entry.lastAt = Date.now();
       return analyzed;
     } catch {
+      if (!isStaleInstance() && entry.gen === myGen) {
+        entry.lastAt = Date.now();
+      }
       return entry.data;
     } finally {
-      entry.fetching = false;
+      if (entry.gen === myGen) {
+        entry.fetching = false;
+      }
     }
   }
 
-  function renderWidgets(footer, card, data) {
+  function renderWidgets(footer, card, data, cid = '') {
     const label = getModelLabel(card).toLowerCase();
     const knownMax = (label && knownModelMaxCtx.get(label)) || Number(data?.maxContextTokens || 256000);
     const effectiveInfo = data && (data.calls > 0 || data.hasActiveLimits) ? data : { ...(data || {}), maxContextTokens: knownMax };
@@ -213,6 +230,9 @@
       plusBtn.insertAdjacentElement('afterend', el);
     } else if (plusBtn.nextElementSibling !== el) {
       plusBtn.insertAdjacentElement('afterend', el);
+    }
+    if (el.getAttribute('data-ag-cid') !== (cid || '')) {
+      el.setAttribute('data-ag-cid', cid || '');
     }
     if (el.getAttribute('data-ag-lite-key') !== key) {
       el.setAttribute('data-ag-lite-key', key);
@@ -328,10 +348,12 @@
     const bgTasks = [];
     let subagentTotal = 0;
 
-    for (const [cid, s] of Object.entries(summaries)) {
+    for (const [cid, rawS] of Object.entries(summaries)) {
+      const s = rawS && typeof rawS.summary === 'object' && rawS.summary !== null ? rawS.summary : rawS;
       if (!s || archivedMap[cid] || s.annotations?.archived || s.annotations?.deleted) continue;
       if (hasIndex && !sidebarMap[cid] && !topLevelMap[cid]) continue;
-      const title = (s.annotations?.title || s.summary || '').trim();
+      const rawTitle = s.annotations?.title || (typeof s.summary === 'string' ? s.summary : '');
+      const title = String(rawTitle || '').trim();
       if (!title) continue;
 
       const subagentCount = Object.keys(idx.activeSubagentsByParent?.[cid] || {}).length || (s.hasRunningSubagents ? 1 : 0);
@@ -1347,7 +1369,7 @@
   }
 
   function syncStudio() {
-    if (destroyed) return;
+    if (isStaleInstance()) return;
     const mount = findNewConvoMount();
     if (!mount) {
       clearStudio();
@@ -1612,17 +1634,22 @@
       }
       const cached = trajCache.get(cid)?.data || null;
       if (cached) {
-        renderWidgets(footer, card, cached);
+        renderWidgets(footer, card, cached, cid);
       } else {
         const h = ensureHooks(true);
         const stepCount = h?.store ? readSummaryInfo(h.store.getState(), cid).stepCount : 0;
         if (stepCount === 0) {
-          renderWidgets(footer, card, null);
+          renderWidgets(footer, card, null, cid);
+        } else {
+          const existing = footer.querySelector('.ag-lite-context-ring');
+          if (existing && existing.getAttribute('data-ag-cid') !== cid) {
+            existing.remove();
+          }
         }
       }
       fetchActiveConvo(cid).then((fresh) => {
         if (!isStaleInstance() && fresh && footer.isConnected && resolveCascadeId(ib) === cid) {
-          renderWidgets(footer, card, fresh);
+          renderWidgets(footer, card, fresh, cid);
         }
       });
     }
@@ -1631,20 +1658,23 @@
 
   const safeSyncAll = () => {
     if (isStaleInstance()) return;
-    try { syncAll(); } catch {}
+    try { syncAll(); } catch (err) {
+      try { console.warn('[agy-lite-hud] syncAll error:', err); } catch {}
+    }
   };
 
+  window.__agLiteHudReady = false;
   window.__agLiteHudDestroy = () => {
     destroyed = true;
-    if (window.__agLiteHudToken === instanceToken) {
-      delete window.__agLiteHudToken;
-    }
     if (pollTimer) clearInterval(pollTimer);
     if (storeDebounce) clearTimeout(storeDebounce);
     if (mutDebounce) clearTimeout(mutDebounce);
     if (saluteTimer) clearTimeout(saluteTimer);
     if (storeUnsub) try { storeUnsub(); } catch {}
     if (mutObs) try { mutObs.disconnect(); } catch {}
+    if (window.__agLiteHudToken !== instanceToken) return;
+    delete window.__agLiteHudToken;
+    delete window.__agLiteHudReady;
     document.querySelectorAll('.ag-lite-bottom-bar, .ag-lite-context-ring, .ag-lite-metrics, .ag-lite-studio, .ag-lite-office').forEach((n) => n.remove());
     document.querySelectorAll('.ag-lite-studio-host').forEach((n) => n.classList.remove('ag-lite-studio-host'));
     delete window.__agLiteRefreshOffice;
@@ -1652,6 +1682,11 @@
     delete window.__agLiteHudDestroy;
   };
 
+  const observeTarget = document.body || document.documentElement;
+  if (!observeTarget) {
+    window.__agLiteHudDestroy();
+    return;
+  }
   mutObs = new MutationObserver(() => {
     if (isStaleInstance() || mutDebounce) return;
     mutDebounce = setTimeout(() => {
@@ -1659,8 +1694,9 @@
       safeSyncAll();
     }, 250);
   });
-  mutObs.observe(document.body, { childList: true, subtree: true });
+  mutObs.observe(observeTarget, { childList: true, subtree: true });
 
   pollTimer = setInterval(safeSyncAll, 2500);
+  window.__agLiteHudReady = true;
   safeSyncAll();
 })();

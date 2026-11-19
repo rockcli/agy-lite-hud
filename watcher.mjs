@@ -47,7 +47,7 @@ function buildInjectExpr() {
     st.textContent = ${JSON.stringify(css)};
     ${usageJs}
     ${runtimeJs}
-    return typeof window.__agLiteHudDestroy === 'function' ? 'ok' : 'no-destroy';
+    return window.__agLiteHudReady === true ? 'ok' : 'not-ready';
   })()`;
 }
 
@@ -89,8 +89,8 @@ async function evalCdp(wsUrl, expression) {
       if (msg.id === 1) {
         clearTimeout(t);
         try { ws.close(); } catch {}
-        if (msg.result?.exceptionDetails) {
-          const desc = msg.result.exceptionDetails.exception?.description || msg.result.exceptionDetails.text || 'CDP eval exception';
+        if (msg.error || msg.result?.exceptionDetails) {
+          const desc = msg.error?.message || msg.result?.exceptionDetails?.exception?.description || msg.result?.exceptionDetails?.text || 'CDP eval error';
           reject(new Error(desc));
           return;
         }
@@ -176,8 +176,7 @@ async function tick() {
     if (pages.length === 0) return;
 
     const sig = [STYLE_PATH, USAGE_PATH, RUNTIME_PATH, COLLECTOR_PATH]
-      .filter((f) => fs.existsSync(f))
-      .map((f) => fs.statSync(f).mtimeMs)
+      .map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } })
       .join(':');
     const changed = sig !== lastSig;
     if (changed || !cachedExpr) {
@@ -187,14 +186,11 @@ async function tick() {
 
     const officeSnap = await getExternalAgentsSnapshot(ONCE ? 0 : 8000);
     const { collectedAt: _ignoredTs, ...officePayload } = officeSnap || {};
-    const officeJson = JSON.stringify(officePayload);
-    if (officeJson !== lastOfficeJson) {
-      lastOfficeJson = officeJson;
-    }
+    lastOfficeJson = JSON.stringify(officePayload);
 
     for (const p of pages) {
       try {
-        const alive = await evalCdp(p.webSocketDebuggerUrl, `Boolean(document.getElementById('ag-lite-hud-style') && typeof window.__agLiteHudDestroy === 'function')`);
+        const alive = await evalCdp(p.webSocketDebuggerUrl, `Boolean(document.getElementById('ag-lite-hud-style') && window.__agLiteHudReady === true && typeof window.__agLiteHudDestroy === 'function')`);
         if (!alive || changed || injectedTargets.get(p.id) !== sig) {
           const status = await evalCdp(p.webSocketDebuggerUrl, cachedExpr);
           if (status === 'ok') {

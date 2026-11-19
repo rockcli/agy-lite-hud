@@ -283,41 +283,45 @@ async function collectDsh() {
   const items = [];
 
   for (const s of recent) {
-    const id = s.sessionId;
-    let lastReply = '';
-    const cached = dshReplyCache.get(id);
-    if (cached && cached.asOfSeq === s.asOfSeq) {
-      lastReply = cached.lastReply;
-    } else if (items.length < 5) {
-      try {
-        const { stdout } = await execFileAsync(process.execPath, [script, 'read', id, '--limit', '4', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
-        const data = JSON.parse(stdout);
-        const msgs = Array.isArray(data) ? data : (data?.messages || data?.items || []);
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i];
-          const role = m?.role || m?.type || '';
-          if (role === 'assistant' || role === 'model') {
-            const txt = cleanText(m.text || m.content || extractTextBlocks(m.parts), 240);
-            if (txt) { lastReply = txt; break; }
+    try {
+      const id = String(s.sessionId || '').trim();
+      if (!id) continue;
+      let lastReply = '';
+      const cached = dshReplyCache.get(id);
+      if (cached && cached.asOfSeq === s.asOfSeq) {
+        lastReply = cached.lastReply;
+      } else if (items.length < 5) {
+        try {
+          const { stdout } = await execFileAsync(process.execPath, [script, 'read', id, '--limit', '4', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
+          const data = JSON.parse(stdout);
+          const msgs = Array.isArray(data) ? data : (data?.messages || data?.items || []);
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            const m = msgs[i];
+            const role = m?.role || m?.type || '';
+            if (role === 'assistant' || role === 'model') {
+              const txt = cleanText(m.text || m.content || extractTextBlocks(m.parts), 240);
+              if (txt) { lastReply = txt; break; }
+            }
           }
-        }
-        if (dshReplyCache.size >= 100) {
-          dshReplyCache.delete(dshReplyCache.keys().next().value);
-        }
-        dshReplyCache.set(id, { asOfSeq: s.asOfSeq, lastReply });
-      } catch {}
-    }
+          if (dshReplyCache.size >= 100) {
+            dshReplyCache.delete(dshReplyCache.keys().next().value);
+          }
+          dshReplyCache.set(id, { asOfSeq: s.asOfSeq, lastReply });
+        } catch {}
+      }
 
-    items.push({
-      id,
-      title: cleanText(s.title, 64) || `DSH ${id.slice(0, 12)}`,
-      project: projectFromCwd(s.cwd, 'DSH'),
-      running: Boolean(s.running),
-      waiting: false,
-      updatedAt: Math.round((s.updatedAt || Date.now()) / 1000),
-      lastReply: lastReply || (s.running ? '正在执行中…' : '点击可复制续写命令'),
-      continueCmd: `node ~/.agents/skills/dsh-session-bridge/scripts/dsh-session.mjs send ${shQuote(id)} "继续"`,
-    });
+      const cwdStr = typeof s.cwd === 'string' ? s.cwd : '';
+      items.push({
+        id,
+        title: cleanText(s.title, 64) || `DSH ${id.slice(0, 12)}`,
+        project: projectFromCwd(cwdStr, 'DSH'),
+        running: Boolean(s.running),
+        waiting: false,
+        updatedAt: Math.round((Number(s.updatedAt) || Date.now()) / 1000),
+        lastReply: lastReply || (s.running ? '正在执行中…' : '点击可复制续写命令'),
+        continueCmd: `node ~/.agents/skills/dsh-session-bridge/scripts/dsh-session.mjs send ${shQuote(id)} "继续"`,
+      });
+    } catch {}
   }
   return items;
 }
@@ -388,16 +392,26 @@ export async function getExternalAgentsSnapshot(minIntervalMs = 6000) {
   }
   collecting = true;
   try {
-    const [claude, codex, dsh, usageHistory, quotas] = await Promise.all([
+    const names = ['claude', 'codex', 'dsh', 'usageHistory', 'quotas'];
+    const settled = await Promise.allSettled([
       Promise.resolve().then(collectClaude),
       Promise.resolve().then(collectCodex),
       collectDsh(),
       Promise.resolve().then(collectUsageHistory),
       Promise.resolve().then(collectHowManyState),
     ]);
-    lastSnapshot = { claude, codex, dsh, usageHistory, quotas, collectedAt: Date.now() };
+    const next = { ...lastSnapshot, collectedAt: Date.now() };
+    settled.forEach((res, idx) => {
+      if (res.status === 'fulfilled') {
+        next[names[idx]] = res.value;
+      } else {
+        console.error(`[office-collector] ${names[idx]} failed: ${res.reason?.message || res.reason}`);
+      }
+    });
+    lastSnapshot = next;
     return lastSnapshot;
-  } catch {
+  } catch (err) {
+    console.error(`[office-collector] snapshot failed: ${err?.message || err}`);
     return lastSnapshot;
   } finally {
     collecting = false;
