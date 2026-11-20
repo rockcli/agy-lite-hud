@@ -66,6 +66,25 @@ node watcher.mjs --remove   # remove injected DOM and styles
 ./uninstall.sh
 ```
 
+## Non-Goals
+
+- **Not an official Antigravity extension or public API integration** — It operates purely as a local CDP renderer overlay (`127.0.0.1`).
+- **No off-device telemetry or TCC screen/keyboard permissions** — Does not require macOS Accessibility, Input Monitoring, or Screen Recording permissions and sends zero external network requests.
+- **Read-only toward external sessions** — External agent logs are never mutated except when you explicitly click handoff to paste text into the Antigravity composer.
+
+## Known Pitfalls
+
+- **Upstream DOM & React Fiber coupling** — Hooks Antigravity DOM selectors (`[data-testid="conversation-view"]`, `[data-testid="agent-input-box"]`, `.agy-composer-footer`, `.agy-home`) and internal Fiber/store methods (`__reactFiber$`, `getCascadeTrajectory`), which may break after Antigravity updates.
+- **Requires CDP port & optional `sqlite3`** — If Antigravity starts without CDP (`DevToolsActivePort` / `AG_CDP_PORT`), `watcher.mjs` silently idles. OpenCode database mode requires `sqlite3` in `PATH`.
+- **Heuristic running-state detection** — External agent active/working badges infer status from file `mtime` (`75s` window), tail markers, and `process.kill(pid, 0)`, so stalled or crashed runs may briefly misclassify.
+- **Simplified Chinese UI copy** — The mounted Pixel Agent Office and holographic status screen currently render in Simplified Chinese.
+
+## Security & Trust Boundaries
+
+- **100% local execution** — Zero external network calls; `watcher.mjs` connects strictly to `http://127.0.0.1:<port>/json/list` and local WebSocket targets validated with `new URL(rawUrl)` (`protocol === 'https:'`, `hostname === '127.0.0.1'`, no credentials) so arbitrary browser tabs are never injected.
+- **Renderer execution & local log trust boundary** — `watcher.mjs` evaluates local JS in the Antigravity Electron renderer (`Runtime.evaluate`), and `office-collector.mjs` reads local agent session histories (titles and ≤240-char reply snippets) into `window.__agLiteExternalAgents`. Keep write permissions on the cloned directory and optional `dsh-session.mjs` bridge restricted to your user account.
+- **Minimal local writes** — Persists only `~/.config/howmanyusage/agy-speed.json` (`0o700` dir / `0o600` atomic write, metrics only without prompt text), `<repo>/watcher.log`, and Antigravity `localStorage` keys (`ag-lite-office-*`).
+
 ## Disclaimer
 
 This project injects local CSS/JS into your running Antigravity desktop client via Chrome DevTools Protocol (`127.0.0.1`), reads local session/state files on your Mac, and writes only local speed samples (`~/.config/howmanyusage/agy-speed.json`) plus `watcher.log`. Zero telemetry, zero external network requests. Internal DOM selectors and store shapes may change with Antigravity updates.
