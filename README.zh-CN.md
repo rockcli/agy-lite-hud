@@ -20,9 +20,10 @@
 
 ## 核心特性
 
-- 🏢 **2.5D 像素 Agent 办公室** — 将 Antigravity 的新对话首页改造成等距像素办公室，实时展示 **Gemini**、**Claude**、**ChatGPT**、**DeepSeek** 四个工位状态、角落机房后台任务，以及墙面销冠榜。
-- 📬 **汇报夹与一键交接** — 点击任意工位可查看进行中/待批阅任务，一键复制续写命令（`claude --resume` / `codex resume`）、标记已批阅，或把上下文直接填入 Antigravity 输入框继续处理。
-- 🟢 **上下文余量指示环** — 在输入框 `+`（Add context）按钮旁注入极简上下文余量圆环，不占用额外空间。
+- 🏢 **2.5D 像素 Agent 办公室** — 挂载新对话首页时自动隐藏原生大 Logo 与招呼语，呈现等距 **AGENT 工作室** 像素办公室，实时展示 **Gemini**、**Claude**、**ChatGPT**、**DeepSeek** 四个工位状态、子代理小助手、3 格机房服务器（`00N` 后台任务、Colab CU 读数、眨眼小像素眼）及墙面销冠榜。
+- 🖥️ **全息状态投屏与一键交接** — 点击忙碌或待批阅小人时，小人会起身指向身侧悬浮的「状态投屏」：可查看任务明细、一键复制续写命令（`claude --resume` / `codex resume`）、标记已批阅，或把上下文直接填入 Antigravity 输入框继续处理（点击窗外任意位置或按 `Esc` 收起；跨 Agent 派发的子任务仅在忙碌时展示工作动画，不污染待批阅列表）。
+- 📚 **每日派单任务书摞** — 桌面以不同配色的等距书本堆叠展示今日任务来源（本人直派与各 Agent 跨路派单，每日 `00:00` 自动清零）。
+- 🟢 **无闪烁上下文余量指示环** — 在输入框 `+`（Add context）按钮旁注入极简上下文余量圆环，支持输入草稿时的实时 Token 估算及同帧无闪烁更新。
 - 🌿 **侧边栏分支精简图标** — 收起侧边栏对话行第二行的分支/worktree 文字，仅保留紧凑的 `13x13` 分支图标。
 - ⚡ **本地测速采样导出** — 纯本地记录每次生成的测速样本（`id`、`model`、`outputTokens`、`ttft`、`stream`、`completedAt`）至 `~/.config/howmanyusage/agy-speed.json`。
 
@@ -34,8 +35,8 @@
 |---|---|---|
 | **Claude Code** | `~/.claude/projects` | 在 Claude 工位展示近期/运行中会话 |
 | **Codex CLI** | `~/.codex/sessions` | 在 ChatGPT 工位展示近期/运行中线程 |
-| **DSH** | `~/.agents/skills/dsh-session-bridge` | 在 DeepSeek 工位展示 DSH 会话 |
-| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | 桌面体力积木、额度耗尽罢工提醒、机房 Colab CU 与墙面实时销冠榜 |
+| **DSH** | `~/.dsh` 与 `dsh-session-bridge` | 在 DeepSeek 工位展示 DSH 会话 |
+| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | 投屏内体力条、额度耗尽罢工提醒、机房 Colab CU 与墙面实时销冠榜 |
 
 ## 快速开始
 

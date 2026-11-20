@@ -20,9 +20,10 @@ English | [简体中文](README.zh-CN.md)
 
 ## Features
 
-- 🏢 **2.5D Pixel Agent Office** — Turns the Antigravity New Conversation page into an interactive isometric studio with 4 agent workstations (**Gemini**, **Claude**, **ChatGPT**, **DeepSeek**), a corner server rack for background tasks, and a live wall leaderboard.
-- 📬 **Briefing Dossier & One-Click Handoff** — Click any workstation to inspect active/unread tasks, copy resume commands (`claude --resume` / `codex resume`), mark items as reviewed, or hand off context directly into the Antigravity composer.
-- 🟢 **Context Remaining Ring** — Injects a clean, non-intrusive context-remaining ring right beside the composer `+` (*Add context*) button.
+- 🏢 **2.5D Pixel Agent Office** — Hides the native home greeting/logo clutter and mounts an isometric **AGENT 工作室** studio on the New Conversation page with 4 agent workstations (**Gemini**, **Claude**, **ChatGPT**, **DeepSeek**), subagent helper bots, a 3-blade corner server rack (`00N` background tasks, Colab CU readout, pixel cat eyes), and a live wall leaderboard.
+- 🖥️ **Holographic Status Projection & One-Click Handoff** — Click an active/unread agent and they stand up pointing to a floating holographic status screen (`状态投屏`): inspect tasks, copy resume commands (`claude --resume` / `codex resume`), mark items reviewed, or hand off context directly into the Antigravity composer (click outside or press `Esc` to close; cross-agent delegated sub-tasks animate as working without polluting unread).
+- 📚 **Daily Dispatch Book Stacks** — Color-coded isometric books stacked on each desk visualize today's task dispatches by source (direct user prompts vs cross-agent dispatches, resetting daily at `00:00`).
+- 🟢 **Flicker-Free Context Remaining Ring** — Injects a clean context-remaining ring right beside the composer `+` (*Add context*) button with live draft-token estimation while typing and smooth same-frame updates.
 - 🌿 **Compact Sidebar Branch Icon** — Collapses the second-line git branch/worktree label in sidebar conversation rows into a crisp `13x13` branch icon.
 - ⚡ **Local Speed Sample Export** — Writes completed generation samples (`id`, `model`, `outputTokens`, `ttft`, `stream`, `completedAt`) locally to `~/.config/howmanyusage/agy-speed.json`.
 
@@ -34,8 +35,8 @@ English | [简体中文](README.zh-CN.md)
 |---|---|---|
 | **Claude Code** | `~/.claude/projects` | Live & recent Claude sessions on the Claude desk |
 | **Codex CLI** | `~/.codex/sessions` | Live & recent Codex threads on the ChatGPT desk |
-| **DSH** | `~/.agents/skills/dsh-session-bridge` | DSH sessions on the DeepSeek desk |
-| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | Desk stamina blocks, strike alerts, Colab CU on the server rack, and live wall leaderboard |
+| **DSH** | `~/.dsh` & `dsh-session-bridge` | DSH sessions on the DeepSeek desk |
+| **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | In-screen stamina bar, quota-exhaustion strike alerts, Colab CU on the server rack, and live wall leaderboard |
 
 > Note: The in-app Pixel Agent Office UI copy is currently in Simplified Chinese.
 
