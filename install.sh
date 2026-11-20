@@ -11,13 +11,15 @@ if ! "$NODE_BIN" -e "if (typeof WebSocket !== 'function') process.exit(1)" 2>/de
   exit 1
 fi
 
-LABEL="com.local.agy-lite-hud"
+LABEL="com.local.antigravity-office"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-LEGACY_PLIST="$HOME/Library/LaunchAgents/io.github.rock.agy-lite-hud.plist"
+LEGACY_LABELS=("com.local.agy-lite-hud" "io.github.rock.agy-lite-hud")
 
-# Clean up legacy LaunchAgent label if upgrading
-launchctl bootout "gui/$(id -u)/io.github.rock.agy-lite-hud" 2>/dev/null || true
-rm -f "$LEGACY_PLIST"
+# Clean up legacy LaunchAgent labels if upgrading
+for old in "${LEGACY_LABELS[@]}"; do
+  launchctl bootout "gui/$(id -u)/${old}" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/${old}.plist"
+done
 
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<EOF

@@ -2215,7 +2215,7 @@
   const safeSyncAll = () => {
     if (isStaleInstance()) return;
     try { syncAll(); } catch (err) {
-      try { console.warn('[agy-lite-hud] syncAll error:', err); } catch {}
+      try { console.warn('[antigravity-office] syncAll error:', err); } catch {}
     }
   };
 

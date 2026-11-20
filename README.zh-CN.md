@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="docs/icon.png" alt="agy-lite-hud icon" width="76" height="76" />
+<img src="docs/icon.png" alt="antigravity-office icon" width="76" height="76" />
 
-# agy-lite-hud
+# antigravity-office
 
-**轻量、零依赖的 Google Antigravity (macOS) CDP 增强面板与 2.5D 像素工位看板。**
+**轻量、零依赖的 Google Antigravity (macOS) 2.5D 像素工位看板与 CDP 增强面板。**
 
-[![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](https://github.com/rockcli/agy-lite-hud)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](https://github.com/rockcli/antigravity-office)
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -14,7 +14,7 @@
 
 <br />
 
-<img src="docs/screenshot.png" alt="agy-lite-hud 像素工位看板截图" width="680" />
+<img src="docs/screenshot.png" alt="antigravity-office 像素工位看板截图" width="680" />
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## 可选本地联动
 
-`agy-lite-hud` 可独立开箱即用：未安装的外部 Agent 会显示为干净的空工位与接入引导，未检测到 `howmanyusage` 时墙面默认展示像素柱状图与折线图示意：
+`antigravity-office` 可独立开箱即用：未安装的外部 Agent 会显示为干净的空工位与接入引导，未检测到 `howmanyusage` 时墙面默认展示像素柱状图与折线图示意：
 
 | 联动工具 | 读取的本地路径 | 增强效果 |
 |---|---|---|
@@ -44,12 +44,12 @@
 环境要求：**macOS**、**Node.js 22+**（内置 `WebSocket` 与 `fetch`），以及已开启 CDP 调试端口的 **Google Antigravity**（自动读取 `~/Library/Application Support/Antigravity/DevToolsActivePort`，也可通过环境变量 `AG_CDP_PORT` 指定）。
 
 ```bash
-git clone https://github.com/rockcli/agy-lite-hud.git
-cd agy-lite-hud
+git clone https://github.com/rockcli/antigravity-office.git
+cd antigravity-office
 ./install.sh
 ```
 
-`./install.sh` 会注册并启动 `LaunchAgent`（`com.local.agy-lite-hud`），监听本地文件改动并自动热更新注入到 Antigravity。
+`./install.sh` 会注册并启动 `LaunchAgent`（`com.local.antigravity-office`），监听本地文件改动并自动热更新注入到 Antigravity。
 
 **手动 / 单次命令：**
 

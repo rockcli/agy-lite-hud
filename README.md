@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="docs/icon.png" alt="agy-lite-hud icon" width="76" height="76" />
+<img src="docs/icon.png" alt="antigravity-office icon" width="76" height="76" />
 
-# agy-lite-hud
+# antigravity-office
 
-**Lightweight, zero-dependency CDP HUD & 2.5D Pixel Agent Office for Google Antigravity (macOS).**
+**Lightweight, zero-dependency 2.5D Pixel Agent Office & CDP HUD for Google Antigravity (macOS).**
 
-[![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](https://github.com/rockcli/agy-lite-hud)
+[![macOS](https://img.shields.io/badge/macOS-13%2B-000000?logo=apple&logoColor=white)](https://github.com/rockcli/antigravity-office)
 [![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -14,7 +14,7 @@ English | [简体中文](README.zh-CN.md)
 
 <br />
 
-<img src="docs/screenshot.png" alt="agy-lite-hud Pixel Agent Office screenshot" width="680" />
+<img src="docs/screenshot.png" alt="antigravity-office Pixel Agent Office screenshot" width="680" />
 
 </div>
 
@@ -29,7 +29,7 @@ English | [简体中文](README.zh-CN.md)
 
 ## Optional Local Integrations
 
-`agy-lite-hud` works standalone out of the box: uninstalled agents render as clean empty desks with onboarding tips, missing external session sources are skipped silently, and the wall whiteboard shows a decorative pixel bar & line chart when `howmanyusage` is not installed:
+`antigravity-office` works standalone out of the box: uninstalled agents render as clean empty desks with onboarding tips, missing external session sources are skipped silently, and the wall whiteboard shows a decorative pixel bar & line chart when `howmanyusage` is not installed:
 
 | Integration | Local Source | What It Enables |
 |---|---|---|
@@ -46,12 +46,12 @@ English | [简体中文](README.zh-CN.md)
 Requires **macOS**, **Node.js 22+** (built-in `WebSocket` & `fetch`), and **Google Antigravity** running with CDP enabled (reads `~/Library/Application Support/Antigravity/DevToolsActivePort`, or override via `AG_CDP_PORT`).
 
 ```bash
-git clone https://github.com/rockcli/agy-lite-hud.git
-cd agy-lite-hud
+git clone https://github.com/rockcli/antigravity-office.git
+cd antigravity-office
 ./install.sh
 ```
 
-`./install.sh` registers and starts a `LaunchAgent` (`com.local.agy-lite-hud`) that watches local files and auto-reloads changes into Antigravity.
+`./install.sh` registers and starts a `LaunchAgent` (`com.local.antigravity-office`) that watches local files and auto-reloads changes into Antigravity.
 
 **Manual / one-shot usage:**
 
