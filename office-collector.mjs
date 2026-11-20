@@ -7,7 +7,35 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 const HOME = os.homedir();
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
-const RUNNING_WINDOW_MS = 45 * 1000;
+const RUNNING_WINDOW_MS = 75 * 1000;
+const ACTIVE_JOB_STATUSES = new Set(['preparing', 'starting', 'queued', 'pending', 'running']);
+
+function startOfTodayMs() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function isPidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 1) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch (err) {
+    return err?.code === 'EPERM';
+  }
+}
+
+function isJobActivelyRunning(job, targetAgent, mtimeMs, now = Date.now()) {
+  if (!ACTIVE_JOB_STATUSES.has(String(job?.status || ''))) return false;
+  if (targetAgent === 'dsh') {
+    const dl = Number(job?.deadline || 0);
+    return dl > 0 ? now < dl : (now - mtimeMs < 30 * 60 * 1000);
+  }
+  if ([job?.claudePid, job?.codexPid, job?.workerPid].some(isPidAlive)) return true;
+  return (now - mtimeMs) < 90 * 1000;
+}
 
 const dshReplyCache = new Map(); // sessionId -> { asOfSeq, lastReply }
 
@@ -98,10 +126,171 @@ function extractTextBlocks(content) {
   return parts.join(' ');
 }
 
-function collectClaude() {
+function resolveDispatcher(job, targetAgent) {
+  const tid = String(job?.ownerThreadId || job?.owner?.id || job?.nativeTask?.owner || '').trim();
+  let from = null;
+  if (tid) {
+    if (tid.startsWith('session-')) from = 'dsh';
+    else if (/^[0-9a-f-]{36}$/i.test(tid) && fs.existsSync(path.join(HOME, '.gemini/antigravity/brain', tid))) from = 'agy';
+    else if (/^01[89a-f][0-9a-f]{5}-[0-9a-f]{4}-7[0-9a-f]{3}-/i.test(tid)) from = 'codex';
+  }
+  if (!from) {
+    const paths = [job?.repo, job?.cwd, job?.contextDir, job?.target?.repo].filter((x) => typeof x === 'string');
+    if (paths.some((p) => p.includes('/.gemini/antigravity/'))) from = 'agy';
+    else if (paths.some((p) => p.includes('/.codex/worktrees/'))) from = 'codex';
+  }
+  if (!from) {
+    const rawHost = String(job?.ownerHost || job?.owner?.host || job?.nativeTask?.host || '').trim().toLowerCase();
+    if (rawHost === 'agy' || rawHost === 'antigravity' || rawHost === 'gemini') from = 'agy';
+    else if (rawHost === 'codex') from = 'codex';
+    else if (rawHost === 'dsh') from = 'dsh';
+    else if (rawHost === 'claude') from = 'claude';
+  }
+  if (!from || from === targetAgent) return null;
+  return from;
+}
+
+function collectDispatchContext() {
+  const dispatches = { agy: {}, claude: {}, codex: {}, dsh: {} };
+  const bySessionId = new Map();
+  const byJobId = new Map();
+  const runningByCwd = new Map();
+  const activeJobs = { claude: [], codex: [], dsh: [] };
+  const dshOutboxLatestAt = new Map();
+  const now = Date.now();
+  const cutoff = now - MAX_AGE_MS;
+  const todayStartMs = startOfTodayMs();
+
+  const jobRoots = [
+    { targetAgent: 'claude', stateDir: process.env.OPUS_REVIEW_STATE_DIR || path.join(HOME, '.codex/state/opus-review') },
+    { targetAgent: 'codex', stateDir: process.env.CODEX_JOBS_STATE_DIR || path.join(HOME, '.agents/state/codex-jobs') },
+    { targetAgent: 'dsh', stateDir: process.env.DSH_REVIEW_STATE_DIR || path.join(HOME, '.dsh/bridge-reviews') },
+  ];
+
+  for (const { targetAgent, stateDir } of jobRoots) {
+    if (!stateDir || !fs.existsSync(stateDir)) continue;
+    const candidates = [];
+    const scanParent = (parentDir, hexOnly = false) => {
+      if (!fs.existsSync(parentDir)) return;
+      let ents;
+      try { ents = fs.readdirSync(parentDir, { withFileTypes: true }); } catch { return; }
+      for (const e of ents) {
+        if (!e.isDirectory()) continue;
+        if (hexOnly && !/^[0-9a-f]{32}$/i.test(e.name)) continue;
+        const jp = path.join(parentDir, e.name, 'job.json');
+        try {
+          const st = fs.statSync(jp);
+          if (st.mtimeMs >= cutoff && st.size > 0) candidates.push({ jp, mtimeMs: st.mtimeMs });
+        } catch {}
+      }
+    };
+    scanParent(path.join(stateDir, 'jobs'), false);
+    if (targetAgent === 'dsh') scanParent(stateDir, true);
+
+    candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const c of candidates.slice(0, 40)) {
+      try {
+        const job = JSON.parse(fs.readFileSync(c.jp, 'utf8'));
+        const from = resolveDispatcher(job, targetAgent);
+        const sessionIds = [job.result?.threadId, job.sessionId, job.resumeSessionId]
+          .filter((sid) => typeof sid === 'string' && sid);
+        const active = isJobActivelyRunning(job, targetAgent, c.mtimeMs, now);
+        const info = {
+          from,
+          jobId: String(job.jobId || ''),
+          cwd: typeof job.cwd === 'string' ? job.cwd : '',
+          status: String(job.status || ''),
+          active,
+        };
+        if (info.jobId) byJobId.set(info.jobId, info);
+        for (const sid of sessionIds) {
+          bySessionId.set(sid, info);
+        }
+        if (info.cwd && active) {
+          runningByCwd.set(`${targetAgent}:${info.cwd}`, info);
+        }
+        if (active) {
+          activeJobs[targetAgent].push({
+            jobId: info.jobId || path.basename(path.dirname(c.jp)),
+            from,
+            cwd: info.cwd,
+            repo: typeof job.repo === 'string' ? job.repo : info.cwd,
+            kind: String(job.kind || 'task'),
+            updatedAt: Math.round(c.mtimeMs / 1000),
+            sessionIds,
+          });
+        }
+        const jobCreatedMs = Date.parse(job.createdAt || job.startedAt || '') || c.mtimeMs;
+        if (info.status !== 'cancelled' && from && (jobCreatedMs >= todayStartMs || active)) {
+          dispatches[targetAgent][from] = (dispatches[targetAgent][from] || 0) + 1;
+        }
+      } catch {}
+    }
+  }
+
+  const outboxPath = path.join(HOME, '.agents/state/dsh-session-bridge/outbox.json');
+  if (fs.existsSync(outboxPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(outboxPath, 'utf8'));
+      for (const bucket of Object.values(parsed || {})) {
+        if (!bucket || typeof bucket !== 'object') continue;
+        for (const entry of Object.values(bucket)) {
+          if (entry && typeof entry.sessionId === 'string' && typeof entry.at === 'number') {
+            const prev = dshOutboxLatestAt.get(entry.sessionId) || 0;
+            if (entry.at > prev) dshOutboxLatestAt.set(entry.sessionId, entry.at);
+          }
+        }
+      }
+    } catch {}
+  }
+
+  return { dispatches, bySessionId, byJobId, runningByCwd, activeJobs, dshOutboxLatestAt, todayStartMs };
+}
+
+function appendActiveJobFallbacks(targetAgent, items, ctx) {
+  const list = ctx?.activeJobs?.[targetAgent];
+  if (!Array.isArray(list) || !list.length) return;
+  const fallbackName = targetAgent === 'claude' ? 'Claude' : targetAgent === 'codex' ? 'Codex' : 'DSH';
+  for (const aj of list) {
+    const matched = items.some((it) =>
+      (aj.sessionIds && aj.sessionIds.includes(it.id))
+      || (aj.jobId && it.jobId === aj.jobId)
+      || (aj.cwd && it.cwd === aj.cwd && it.running)
+    );
+    if (matched) continue;
+    items.push({
+      id: `job:${aj.jobId}`,
+      title: aj.kind === 'review' ? '外部代码/方案审查执行中' : '外部委派任务执行中',
+      project: projectFromCwd(aj.repo || aj.cwd, fallbackName),
+      running: true,
+      waiting: false,
+      delegated: true,
+      delegatedBy: aj.from,
+      isSubagent: false,
+      subagentCount: 0,
+      updatedAt: aj.updatedAt || Math.round(Date.now() / 1000),
+      lastReply: '正在执行主控派发的任务…',
+      continueCmd: '',
+    });
+  }
+}
+
+function selectRecentItems(items, limit = 12) {
+  const rank = (it) => (it.running ? 2 : !it.delegated ? 1 : 0);
+  return [...items]
+    .sort((a, b) => (rank(b) - rank(a)) || ((b.updatedAt || 0) - (a.updatedAt || 0)))
+    .slice(0, limit)
+    .map(({ jobId: _jid, cwd: _cwd, ...rest }) => rest);
+}
+
+function collectClaude(ctx) {
   const dir = path.join(HOME, '.claude/projects');
-  if (!fs.existsSync(dir)) return [];
-  const files = findRecentJsonl(dir, 3, 10);
+  if (!fs.existsSync(dir)) {
+    const fallbackItems = [];
+    appendActiveJobFallbacks('claude', fallbackItems, ctx);
+    return selectRecentItems(fallbackItems, 12);
+  }
+  const files = findRecentJsonl(dir, 3, 36);
   const now = Date.now();
   const items = [];
 
@@ -114,11 +303,19 @@ function collectClaude() {
       let title = '';
       let lastReply = '';
       let ended = false;
+      let entrypoint = '';
+      let promptSource = '';
+      let turnOrigin = '';
+      let isSidechain = false;
 
       for (let i = lines.length - 1; i >= 0; i--) {
         let obj;
         try { obj = JSON.parse(lines[i]); } catch { continue; }
         if (!cwd && obj.cwd) cwd = obj.cwd;
+        if (!entrypoint && obj.entrypoint) entrypoint = obj.entrypoint;
+        if (!promptSource && obj.promptSource) promptSource = obj.promptSource;
+        if (!turnOrigin && obj.turnOrigin) turnOrigin = obj.turnOrigin;
+        if (!isSidechain && obj.isSidechain) isSidechain = true;
         if (!title && obj.type === 'last-prompt' && obj.lastPrompt) {
           title = cleanText(obj.lastPrompt, 64);
         }
@@ -134,21 +331,58 @@ function collectClaude() {
         }
       }
 
-      if (!title) {
-        const headLines = readHead(f.p, 8192).split('\n').filter(Boolean);
+      if (!title || !entrypoint || !cwd) {
+        const headLines = readHead(f.p, 16384).split('\n').filter(Boolean);
         for (const hl of headLines) {
           try {
             const o = JSON.parse(hl);
             if (!cwd && o.cwd) cwd = o.cwd;
-            if (o.type === 'user' && o.message?.content) {
+            if (!entrypoint && o.entrypoint) entrypoint = o.entrypoint;
+            if (!promptSource && o.promptSource) promptSource = o.promptSource;
+            if (!turnOrigin && o.turnOrigin) turnOrigin = o.turnOrigin;
+            if (!isSidechain && o.isSidechain) isSidechain = true;
+            if (!title && o.type === 'user' && o.message?.content) {
               const t = cleanText(extractTextBlocks(o.message.content), 64);
-              if (t) { title = t; break; }
+              if (t) title = t;
             }
           } catch {}
         }
       }
 
-      const running = (now - f.mtimeMs) < RUNNING_WINDOW_MS && !ended;
+      let subagentCount = 0;
+      const subDir = path.join(path.dirname(f.p), id, 'subagents');
+      if (fs.existsSync(subDir)) {
+        try {
+          for (const se of fs.readdirSync(subDir, { withFileTypes: true })) {
+            if (!se.isFile() || !se.name.endsWith('.jsonl')) continue;
+            const sst = fs.statSync(path.join(subDir, se.name));
+            if (now - sst.mtimeMs < RUNNING_WINDOW_MS) subagentCount++;
+          }
+        } catch {}
+      }
+
+      const prelimRunning = ((now - f.mtimeMs) < RUNNING_WINDOW_MS || subagentCount > 0) && !ended;
+      const jobMatch = cwd.match(/\/opus-review\/jobs\/([0-9a-f]{32})/i);
+      const matchedJob = ctx?.bySessionId?.get(id)
+        || (jobMatch ? ctx?.byJobId?.get(jobMatch[1]) : null)
+        || (cwd ? ctx?.runningByCwd?.get(`claude:${cwd}`) : null)
+        || null;
+      const running = Boolean(matchedJob?.active) || prelimRunning;
+      const delegated = Boolean(
+        matchedJob
+        || entrypoint === 'sdk-cli'
+        || promptSource === 'sdk'
+        || turnOrigin === 'sdk'
+        || isSidechain
+        || cwd.includes('/opus-review/jobs/')
+      );
+      const delegatedBy = matchedJob?.from || (delegated && cwd.includes('/.gemini/antigravity/') ? 'agy' : null);
+      if (!matchedJob && delegatedBy && ctx?.dispatches?.claude && (f.mtimeMs >= ctx.todayStartMs || running)) {
+        ctx.dispatches.claude[delegatedBy] = (ctx.dispatches.claude[delegatedBy] || 0) + 1;
+      } else if (!delegated && ctx?.dispatches?.claude && (f.mtimeMs >= ctx.todayStartMs || running)) {
+        ctx.dispatches.claude.user = (ctx.dispatches.claude.user || 0) + 1;
+      }
+
       const project = projectFromCwd(cwd, 'Claude');
       const continueCmd = cwd
         ? `cd -- ${shQuote(cwd)} && claude --resume ${shQuote(id)}`
@@ -156,22 +390,33 @@ function collectClaude() {
 
       items.push({
         id,
+        jobId: matchedJob?.jobId || '',
+        cwd,
         title: title || `Claude 会话 ${id.slice(0, 8)}`,
         project,
         running,
         waiting: false,
+        delegated,
+        delegatedBy,
+        isSubagent: false,
+        subagentCount,
         updatedAt: Math.round(f.mtimeMs / 1000),
         lastReply: lastReply || (running ? '正在执行中…' : '暂无文字回复摘要'),
         continueCmd,
       });
     } catch {}
   }
-  return items;
+  appendActiveJobFallbacks('claude', items, ctx);
+  return selectRecentItems(items, 12);
 }
 
-function collectCodex() {
+function collectCodex(ctx) {
   const sessionsRoot = path.join(HOME, '.codex/sessions');
-  if (!fs.existsSync(sessionsRoot)) return [];
+  if (!fs.existsSync(sessionsRoot)) {
+    const fallbackItems = [];
+    appendActiveJobFallbacks('codex', fallbackItems, ctx);
+    return selectRecentItems(fallbackItems, 12);
+  }
 
   // Only scan today and yesterday date folders for speed
   const dirsToScan = [];
@@ -202,18 +447,22 @@ function collectCodex() {
 
   const now = Date.now();
   const items = [];
-  for (const f of files.slice(0, 10)) {
+  for (const f of files.slice(0, 36)) {
     try {
-      const headLines = readHead(f.p, 12288).split('\n').filter(Boolean);
+      const headLines = readHead(f.p, 131072).split('\n').filter(Boolean);
       let id = '';
       let cwd = '';
       let title = '';
+      let originator = '';
+      let source = null;
       for (const hl of headLines) {
         try {
           const o = JSON.parse(hl);
           if (o.type === 'session_meta' && o.payload) {
             if (o.payload.id) id = o.payload.id;
             if (o.payload.cwd) cwd = o.payload.cwd;
+            if (o.payload.originator) originator = String(o.payload.originator);
+            if (o.payload.source !== undefined) source = o.payload.source;
           }
           if (!title && o.type === 'event_msg' && o.payload?.type === 'user_message' && o.payload?.message) {
             title = cleanText(o.payload.message, 64);
@@ -249,81 +498,158 @@ function collectCodex() {
         }
       }
 
-      const running = (now - f.mtimeMs) < RUNNING_WINDOW_MS && !ended;
+      const prelimRunning = (now - f.mtimeMs) < RUNNING_WINDOW_MS && !ended;
+      const isSubagent = Boolean(source && typeof source === 'object' && source.subagent);
+      const jobMatch = cwd.match(/\/codex-jobs\/jobs\/([0-9a-f]{32})/i);
+      const matchedJob = ctx?.bySessionId?.get(id)
+        || (jobMatch ? ctx?.byJobId?.get(jobMatch[1]) : null)
+        || (cwd ? ctx?.runningByCwd?.get(`codex:${cwd}`) : null)
+        || null;
+      const running = Boolean(matchedJob?.active) || prelimRunning;
+      const delegated = Boolean(
+        matchedJob
+        || isSubagent
+        || originator === 'codex_exec'
+        || source === 'exec'
+        || cwd.includes('/codex-jobs/jobs/')
+      );
+      const delegatedBy = matchedJob?.from || (!isSubagent && delegated && cwd.includes('/.gemini/antigravity/') ? 'agy' : null);
+      if (!matchedJob && delegatedBy && ctx?.dispatches?.codex && (f.mtimeMs >= ctx.todayStartMs || running)) {
+        ctx.dispatches.codex[delegatedBy] = (ctx.dispatches.codex[delegatedBy] || 0) + 1;
+      } else if (!delegated && !isSubagent && ctx?.dispatches?.codex && (f.mtimeMs >= ctx.todayStartMs || running)) {
+        ctx.dispatches.codex.user = (ctx.dispatches.codex.user || 0) + 1;
+      }
+
       const project = projectFromCwd(cwd, 'Codex');
       items.push({
         id,
+        jobId: matchedJob?.jobId || '',
+        cwd,
         title: title || `Codex 线程 ${id.slice(0, 8)}`,
         project,
         running,
         waiting: false,
+        delegated,
+        delegatedBy,
+        isSubagent,
+        subagentCount: 0,
         updatedAt: Math.round(f.mtimeMs / 1000),
         lastReply: lastReply || (running ? '正在执行中…' : '暂无文字回复摘要'),
         continueCmd: `codex resume ${shQuote(id)}`,
       });
     } catch {}
   }
-  return items;
+  appendActiveJobFallbacks('codex', items, ctx);
+  return selectRecentItems(items, 12);
 }
 
-async function collectDsh() {
+async function collectDsh(ctx) {
   const script = path.join(HOME, '.agents/skills/dsh-session-bridge/scripts/dsh-session.mjs');
-  if (!fs.existsSync(script)) return [];
+  if (!fs.existsSync(script)) {
+    const fallbackItems = [];
+    appendActiveJobFallbacks('dsh', fallbackItems, ctx);
+    return selectRecentItems(fallbackItems, 12);
+  }
   let rawList;
   try {
-    const { stdout } = await execFileAsync(process.execPath, [script, 'list', '--limit', '10', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
+    const { stdout } = await execFileAsync(process.execPath, [script, 'list', '--limit', '18', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
     rawList = JSON.parse(stdout);
   } catch {
-    return [];
+    const fallbackItems = [];
+    appendActiveJobFallbacks('dsh', fallbackItems, ctx);
+    return selectRecentItems(fallbackItems, 12);
   }
-  if (!Array.isArray(rawList)) return [];
+  if (!Array.isArray(rawList)) {
+    const fallbackItems = [];
+    appendActiveJobFallbacks('dsh', fallbackItems, ctx);
+    return selectRecentItems(fallbackItems, 12);
+  }
 
   const cutoff = Date.now() - MAX_AGE_MS;
-  const recent = rawList.filter((s) => s && !s.archived && !s.blank && (s.running || (s.updatedAt || 0) >= cutoff)).slice(0, 8);
-  const items = [];
+  const recent = rawList.filter((s) => s && !s.archived && !s.blank && (s.running || (s.updatedAt || 0) >= cutoff));
+  const preliminary = [];
 
   for (const s of recent) {
     try {
       const id = String(s.sessionId || '').trim();
       if (!id) continue;
-      let lastReply = '';
-      const cached = dshReplyCache.get(id);
-      if (cached && cached.asOfSeq === s.asOfSeq) {
-        lastReply = cached.lastReply;
-      } else if (items.length < 5) {
-        try {
-          const { stdout } = await execFileAsync(process.execPath, [script, 'read', id, '--limit', '4', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
-          const data = JSON.parse(stdout);
-          const msgs = Array.isArray(data) ? data : (data?.messages || data?.items || []);
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const m = msgs[i];
-            const role = m?.role || m?.type || '';
-            if (role === 'assistant' || role === 'model') {
-              const txt = cleanText(m.text || m.content || extractTextBlocks(m.parts), 240);
-              if (txt) { lastReply = txt; break; }
-            }
-          }
-          if (dshReplyCache.size >= 100) {
-            dshReplyCache.delete(dshReplyCache.keys().next().value);
-          }
-          dshReplyCache.set(id, { asOfSeq: s.asOfSeq, lastReply });
-        } catch {}
+      const cwdStr = typeof s.cwd === 'string' ? s.cwd : '';
+      const title = cleanText(s.title, 64) || `DSH ${id.slice(0, 12)}`;
+      const updatedMs = Number(s.updatedAt) || Date.now();
+      const jobMatch = cwdStr.match(/\/bridge-reviews\/(?:jobs\/)?([0-9a-f]{32})/i);
+      const matchedJob = ctx?.bySessionId?.get(id)
+        || (jobMatch ? ctx?.byJobId?.get(jobMatch[1]) : null)
+        || (cwdStr ? ctx?.runningByCwd?.get(`dsh:${cwdStr}`) : null)
+        || null;
+      const running = Boolean(s.running) || Boolean(matchedJob?.active);
+      const outboxAt = ctx?.dshOutboxLatestAt?.get(id) || 0;
+      const byOutbox = outboxAt > 0 && updatedMs >= outboxAt - 10000 && updatedMs <= outboxAt + 2 * 3600 * 1000;
+      const delegated = Boolean(
+        matchedJob
+        || cwdStr.includes('/bridge-reviews/')
+        || /^后台(审查|调查|任务)\b/.test(title)
+        || s.visible === false
+        || byOutbox
+      );
+      const delegatedBy = matchedJob?.from || null;
+      if (!delegated && ctx?.dispatches?.dsh && (updatedMs >= ctx.todayStartMs || running)) {
+        ctx.dispatches.dsh.user = (ctx.dispatches.dsh.user || 0) + 1;
       }
 
-      const cwdStr = typeof s.cwd === 'string' ? s.cwd : '';
-      items.push({
+      preliminary.push({
         id,
-        title: cleanText(s.title, 64) || `DSH ${id.slice(0, 12)}`,
+        jobId: matchedJob?.jobId || '',
+        cwd: cwdStr,
+        asOfSeq: s.asOfSeq,
+        title,
         project: projectFromCwd(cwdStr, 'DSH'),
-        running: Boolean(s.running),
+        running,
         waiting: false,
-        updatedAt: Math.round((Number(s.updatedAt) || Date.now()) / 1000),
-        lastReply: lastReply || (s.running ? '正在执行中…' : '点击可复制续写命令'),
+        delegated,
+        delegatedBy,
+        isSubagent: false,
+        subagentCount: 0,
+        updatedAt: Math.round(updatedMs / 1000),
+        lastReply: '',
         continueCmd: `node ~/.agents/skills/dsh-session-bridge/scripts/dsh-session.mjs send ${shQuote(id)} "继续"`,
       });
     } catch {}
   }
-  return items;
+
+  appendActiveJobFallbacks('dsh', preliminary, ctx);
+  const selected = selectRecentItems(preliminary, 12);
+  let fetchCount = 0;
+  for (const item of selected) {
+    let lastReply = '';
+    const asOfSeq = item.asOfSeq;
+    delete item.asOfSeq;
+    if (String(item.id).startsWith('job:')) continue;
+    const cached = dshReplyCache.get(item.id);
+    if (cached && cached.asOfSeq === asOfSeq) {
+      lastReply = cached.lastReply;
+    } else if ((item.running || !item.delegated) && fetchCount < 5) {
+      fetchCount++;
+      try {
+        const { stdout } = await execFileAsync(process.execPath, [script, 'read', item.id, '--limit', '4', '--json'], { timeout: 3500, maxBuffer: 4 * 1024 * 1024 });
+        const data = JSON.parse(stdout);
+        const msgs = Array.isArray(data) ? data : (data?.messages || data?.items || []);
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i];
+          const role = m?.role || m?.type || '';
+          if (role === 'assistant' || role === 'model') {
+            const txt = cleanText(m.text || m.content || extractTextBlocks(m.parts), 240);
+            if (txt) { lastReply = txt; break; }
+          }
+        }
+        if (dshReplyCache.size >= 100) {
+          dshReplyCache.delete(dshReplyCache.keys().next().value);
+        }
+        dshReplyCache.set(item.id, { asOfSeq, lastReply });
+      } catch {}
+    }
+    item.lastReply = lastReply || (item.running ? '正在执行中…' : '点击可复制续写命令');
+  }
+  return selected;
 }
 
 function collectUsageHistory() {
@@ -382,7 +708,15 @@ function collectHowManyState() {
   }
 }
 
-let lastSnapshot = { claude: [], codex: [], dsh: [], usageHistory: null, quotas: null, collectedAt: 0 };
+let lastSnapshot = {
+  claude: [],
+  codex: [],
+  dsh: [],
+  dispatches: { agy: {}, claude: {}, codex: {}, dsh: {} },
+  usageHistory: null,
+  quotas: null,
+  collectedAt: 0,
+};
 let collecting = false;
 
 export async function getExternalAgentsSnapshot(minIntervalMs = 6000) {
@@ -392,15 +726,16 @@ export async function getExternalAgentsSnapshot(minIntervalMs = 6000) {
   }
   collecting = true;
   try {
+    const ctx = collectDispatchContext();
     const names = ['claude', 'codex', 'dsh', 'usageHistory', 'quotas'];
     const settled = await Promise.allSettled([
-      Promise.resolve().then(collectClaude),
-      Promise.resolve().then(collectCodex),
-      collectDsh(),
+      Promise.resolve().then(() => collectClaude(ctx)),
+      Promise.resolve().then(() => collectCodex(ctx)),
+      collectDsh(ctx),
       Promise.resolve().then(collectUsageHistory),
       Promise.resolve().then(collectHowManyState),
     ]);
-    const next = { ...lastSnapshot, collectedAt: Date.now() };
+    const next = { ...lastSnapshot, dispatches: ctx.dispatches, collectedAt: Date.now() };
     settled.forEach((res, idx) => {
       if (res.status === 'fulfilled') {
         next[names[idx]] = res.value;

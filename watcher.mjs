@@ -57,7 +57,7 @@ const REMOVE_EXPR = `(() => {
   }
   const st = document.getElementById('ag-lite-hud-style');
   if (st) st.remove();
-  document.querySelectorAll('.ag-lite-bottom-bar, .ag-lite-context-ring, .ag-lite-metrics, .ag-lite-studio, .ag-lite-office').forEach((n) => n.remove());
+  document.querySelectorAll('.ag-lite-bottom-bar, .ag-lite-context-ring, .ag-lite-ctx-ring, .ag-lite-metrics, .ag-lite-studio, .ag-lite-office').forEach((n) => n.remove());
   document.querySelectorAll('.ag-lite-studio-host').forEach((n) => n.classList.remove('ag-lite-studio-host'));
   try { delete window.__agLiteExternalAgents; } catch {}
   try { delete window.__agCsUsageCore; } catch {}

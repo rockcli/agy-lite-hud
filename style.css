@@ -28,6 +28,9 @@
 
 /* 2. Non-clickable context remaining ring next to the "+" button */
 .ag-lite-context-ring {
+  display: none !important;
+}
+.ag-lite-ctx-ring {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -37,7 +40,7 @@
   pointer-events: none;
   user-select: none;
 }
-.ag-lite-context-ring svg {
+.ag-lite-ctx-ring svg {
   display: block;
   width: 14px;
   height: 14px;
@@ -47,9 +50,34 @@
 
 /* 3. 2.5D Isometric 4-Intern Pixel Office (New Conversation Dashboard) */
 .ag-lite-studio-host {
-  justify-content: flex-start !important;
-  padding-top: 20px !important;
   overflow-y: auto !important;
+}
+
+/* Hide Antigravity native home logo, greeting & layout spacer when Pixel Office is mounted */
+.ag-lite-studio-host [data-testid="home-greeting"],
+.ag-lite-studio-host .home-greeting-mark,
+.ag-lite-studio-host .home-greeting-title,
+.ag-lite-studio-host [aria-hidden="true"]:has(+ [data-testid="home-greeting"]) {
+  display: none !important;
+}
+
+.ag-lite-studio-host section[aria-label="Announcements and tips"]:not(:has([data-card-deck-slot]:not([hidden]))) {
+  display: none !important;
+}
+
+.ag-lite-studio-host > div:has(~ .ag-lite-office) {
+  flex: 0 0 auto !important;
+  padding-top: 0 !important;
+  padding-bottom: 8px !important;
+  overflow: visible !important;
+}
+
+.ag-lite-studio-host > div:has(~ .ag-lite-office) > div.mt-auto:not(:has([data-testid^="suggested-action-row-"], [data-card-deck-slot]:not([hidden]))) {
+  display: none !important;
+}
+
+.ag-lite-studio-host > div:has(~ .ag-lite-office):not(:has(> div:first-child:not(:empty), [data-testid^="suggested-action-row-"], [data-card-deck-slot]:not([hidden]))) {
+  display: none !important;
 }
 
 .ag-lite-office {
@@ -74,10 +102,16 @@
   --ag-of-red: #dc2626;
 
   position: relative;
+  flex: 1 1 0% !important;
+  min-height: 260px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   max-width: 1180px;
-  margin: 0 auto 14px;
-  padding: 0 12px;
+  margin: 0 auto !important;
+  padding: 6px 12px 10px !important;
   box-sizing: border-box;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
   color: var(--ag-of-ink);
@@ -108,9 +142,8 @@
 
 .ag-office-stage {
   position: relative;
-  width: 100%;
-  aspect-ratio: 920 / 460;
-  max-height: 620px;
+  width: min(100%, calc((100vh - 205px) * 2.11), 1120px);
+  aspect-ratio: 920 / 436;
   margin: 0 auto;
 }
 
@@ -183,6 +216,63 @@
   border: 1.5px solid #475569;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.18);
   pointer-events: none;
+}
+
+.ag-office-popover.is-holo {
+  top: auto;
+  right: auto;
+  transform: translateY(var(--ag-holo-ty, -50%));
+  border: 1.8px solid var(--ag-holo-accent, var(--ag-of-blue));
+  background: color-mix(in srgb, var(--ag-of-pop-bg) 93%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 14px 34px rgba(20, 24, 36, 0.22), 0 0 18px color-mix(in srgb, var(--ag-holo-accent, #5b6ef5) 22%, transparent);
+  animation: ag-holo-pop 0.16s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+
+.ag-office-popover.is-holo::before {
+  display: none;
+}
+
+.ag-office-popover.is-holo::after {
+  content: "";
+  position: absolute;
+  top: var(--ag-holo-pin, 50%);
+  transform: translateY(-50%);
+  width: 4px;
+  height: 24px;
+  border-radius: 3px;
+  background: var(--ag-holo-accent, var(--ag-of-blue));
+  box-shadow: 0 0 10px var(--ag-holo-accent, var(--ag-of-blue));
+  pointer-events: none;
+}
+
+.ag-office-popover.is-holo[data-ag-dir="right"]::after {
+  left: -3px;
+}
+
+.ag-office-popover.is-holo[data-ag-dir="left"]::after {
+  right: -3px;
+}
+
+.ag-office-popover.is-holo .ag-pop-head {
+  flex-wrap: wrap;
+  padding: 10px 12px 8px;
+}
+
+.ag-office-popover.is-holo .ag-pop-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+}
+
+.ag-office-popover.is-holo .ag-pop-item-foot {
+  flex-wrap: wrap;
+}
+
+@keyframes ag-holo-pop {
+  0% { opacity: 0; transform: translateY(var(--ag-holo-ty, -50%)) scale(0.95); }
+  100% { opacity: 1; transform: translateY(var(--ag-holo-ty, -50%)) scale(1); }
 }
 
 .ag-pop-head {
@@ -389,33 +479,38 @@
 /* Isometric Pixel Animations */
 @keyframes ag-iso-bob {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-3.5px); }
+  50% { transform: translateY(-3px); }
 }
 
 @keyframes ag-iso-type-l {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-2.5px); }
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(-1.5px, -4px) rotate(11deg); }
 }
 
 @keyframes ag-iso-type-r {
-  0%, 100% { transform: translateY(-2.5px); }
-  50% { transform: translateY(0); }
+  0%, 100% { transform: translate(-1px, -4px) rotate(-11deg); }
+  50% { transform: translate(0, 0) rotate(0deg); }
+}
+
+@keyframes ag-iso-wave-arm {
+  0%, 100% { transform: rotate(-9deg) translateY(0); }
+  50% { transform: rotate(11deg) translateY(-2px); }
 }
 
 @keyframes ag-iso-work-head {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(-1px, 1.5px); }
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(-1px, 1.5px) rotate(-2deg); }
 }
 
 @keyframes ag-iso-hold-doc {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-3px) rotate(-2deg); }
+  0%, 100% { transform: translateY(0) rotate(-2.5deg); }
+  50% { transform: translateY(-4.5px) rotate(3deg); }
 }
 
 @keyframes ag-iso-code-rise {
   0% { opacity: 0; transform: translateY(3px); }
   35% { opacity: 0.95; }
-  100% { opacity: 0; transform: translateY(-7px); }
+  100% { opacity: 0; transform: translateY(-8px); }
 }
 
 @keyframes ag-iso-standup {
@@ -425,8 +520,18 @@
 }
 
 @keyframes ag-iso-strike {
-  0%, 100% { transform: rotate(-4deg); }
-  50% { transform: rotate(5deg); }
+  0%, 100% { transform: rotate(-7deg) translateY(0); }
+  50% { transform: rotate(8deg) translateY(-2.5px); }
+}
+
+@keyframes ag-iso-point-r {
+  0%, 100% { transform: rotate(-2deg); }
+  50% { transform: rotate(2.5deg) translate(1px, -1px); }
+}
+
+@keyframes ag-iso-point-l {
+  0%, 100% { transform: rotate(2deg); }
+  50% { transform: rotate(-2.5deg) translate(-1px, -1px); }
 }
 
 @keyframes ag-iso-blink {
@@ -440,13 +545,16 @@
 }
 
 .ag-iso-wave { animation: ag-iso-bob 0.85s ease-in-out infinite; }
-.ag-iso-type-l { animation: ag-iso-type-l 0.28s steps(2, end) infinite; }
-.ag-iso-type-r { animation: ag-iso-type-r 0.28s steps(2, end) infinite; }
-.ag-iso-work-head { animation: ag-iso-work-head 0.9s ease-in-out infinite; }
-.ag-iso-hold-doc { animation: ag-iso-hold-doc 1.4s ease-in-out infinite; transform-origin: 14px -20px; }
-.ag-iso-code-rise { animation: ag-iso-code-rise 1.6s ease-out infinite; }
+.ag-iso-type-l { animation: ag-iso-type-l 0.26s ease-in-out infinite; transform-origin: 7px -15px; }
+.ag-iso-type-r { animation: ag-iso-type-r 0.26s ease-in-out infinite; transform-origin: 19px -13px; }
+.ag-iso-wave-arm { animation: ag-iso-wave-arm 0.6s ease-in-out infinite; transform-origin: 20px -18px; }
+.ag-iso-work-head { animation: ag-iso-work-head 0.85s ease-in-out infinite; transform-origin: 14px -23px; }
+.ag-iso-hold-doc { animation: ag-iso-hold-doc 1.05s ease-in-out infinite; transform-origin: 13.5px -17px; }
+.ag-iso-code-rise { animation: ag-iso-code-rise 1.2s ease-out infinite; }
 .ag-iso-salute { animation: ag-iso-standup 0.28s cubic-bezier(0.22, 1.25, 0.36, 1) forwards; }
-.ag-iso-strike { animation: ag-iso-strike 1.1s ease-in-out infinite; transform-origin: 20px -18px; }
+.ag-iso-strike { animation: ag-iso-strike 0.85s ease-in-out infinite; transform-origin: 20px -17px; }
+.ag-iso-point-r { animation: ag-iso-point-r 1.4s ease-in-out infinite; transform-origin: 22px -17px; }
+.ag-iso-point-l { animation: ag-iso-point-l 1.4s ease-in-out infinite; transform-origin: 5px -17px; }
 .ag-iso-glow { animation: ag-iso-blink 1.1s ease-in-out infinite; }
 .ag-iso-cat-eyes { animation: ag-iso-cat-blink 3.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
 .ag-iso-led { animation: ag-iso-blink 1.5s ease-in-out infinite; }
