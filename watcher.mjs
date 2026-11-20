@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { fileURLToPath } from 'node:url';
-import { getExternalAgentsSnapshot } from './office-collector.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const STYLE_PATH = path.join(__dirname, 'style.css');
@@ -111,8 +110,30 @@ let lastSpeedJson = '';
 let lastOfficeJson = '';
 let cachedExpr = '';
 let ticking = false;
+let lastCollectorMtime = -1;
+let cachedGetExternalAgentsSnapshot = null;
 const injectedTargets = new Map();
 const officePushedTargets = new Map();
+
+function safeMtime(filePath) {
+  try { return fs.statSync(filePath).mtimeMs; } catch { return 0; }
+}
+
+async function loadCollector(collectorMtime) {
+  if (!cachedGetExternalAgentsSnapshot || collectorMtime !== lastCollectorMtime) {
+    try {
+      const mod = await import(`${pathToFileURL(COLLECTOR_PATH).href}?t=${collectorMtime}`);
+      if (typeof mod?.getExternalAgentsSnapshot === 'function') {
+        cachedGetExternalAgentsSnapshot = mod.getExternalAgentsSnapshot;
+        lastCollectorMtime = collectorMtime;
+      }
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] collector reload failed: ${err?.message || err}`);
+      if (!cachedGetExternalAgentsSnapshot) throw err;
+    }
+  }
+  return cachedGetExternalAgentsSnapshot;
+}
 
 function mergeAndWriteSpeedSamples(incoming) {
   if (!Array.isArray(incoming) || incoming.length === 0) return;
@@ -175,16 +196,21 @@ async function tick() {
     }
     if (pages.length === 0) return;
 
-    const sig = [STYLE_PATH, USAGE_PATH, RUNTIME_PATH, COLLECTOR_PATH]
-      .map((f) => { try { return fs.statSync(f).mtimeMs; } catch { return 0; } })
-      .join(':');
+    const collectorMtime = safeMtime(COLLECTOR_PATH);
+    const sig = [
+      safeMtime(STYLE_PATH),
+      safeMtime(USAGE_PATH),
+      safeMtime(RUNTIME_PATH),
+      collectorMtime,
+    ].join(':');
     const changed = sig !== lastSig;
     if (changed || !cachedExpr) {
       lastSig = sig;
       cachedExpr = buildInjectExpr();
     }
 
-    const officeSnap = await getExternalAgentsSnapshot(ONCE ? 0 : 8000);
+    const getSnapshot = await loadCollector(collectorMtime);
+    const officeSnap = await getSnapshot(ONCE ? 0 : 8000);
     const { collectedAt: _ignoredTs, ...officePayload } = officeSnap || {};
     lastOfficeJson = JSON.stringify(officePayload);
 

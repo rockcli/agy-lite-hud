@@ -10,6 +10,28 @@ const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const RUNNING_WINDOW_MS = 75 * 1000;
 const ACTIVE_JOB_STATUSES = new Set(['preparing', 'starting', 'queued', 'pending', 'running']);
 
+function safeMtimeMs(p) {
+  if (!p) return 0;
+  try {
+    return Math.floor(fs.statSync(p).mtimeMs) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function maxItemMs(items) {
+  let max = 0;
+  for (const it of Array.isArray(items) ? items : []) {
+    const ms = Number(it?.updatedAt || 0) * 1000;
+    if (ms > max) max = ms;
+  }
+  return max;
+}
+
+function hasPositiveCount(map) {
+  return Object.values(map || {}).some((n) => Number(n) > 0);
+}
+
 function startOfTodayMs() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -151,7 +173,7 @@ function resolveDispatcher(job, targetAgent) {
 }
 
 function collectDispatchContext() {
-  const dispatches = { agy: {}, claude: {}, codex: {}, dsh: {} };
+  const dispatches = { agy: {}, claude: {}, codex: {}, dsh: {}, opencode: {} };
   const bySessionId = new Map();
   const byJobId = new Map();
   const runningByCwd = new Map();
@@ -652,6 +674,327 @@ async function collectDsh(ctx) {
   return selected;
 }
 
+function resolveOpenCodeDataDir() {
+  if (process.env.OPENCODE_DATA) return process.env.OPENCODE_DATA;
+  if (process.env.XDG_DATA_HOME) return path.join(process.env.XDG_DATA_HOME, 'opencode');
+  return path.join(HOME, '.local/share/opencode');
+}
+
+function getOpenCodePaths() {
+  const dataDir = resolveOpenCodeDataDir();
+  return {
+    dataDir,
+    dbPath: path.join(dataDir, 'opencode.db'),
+    walPath: path.join(dataDir, 'opencode.db-wal'),
+    legacySessionDir: path.join(dataDir, 'storage/session'),
+  };
+}
+
+async function runSqliteJson(dbPath, sql) {
+  try {
+    const { stdout } = await execFileAsync(
+      'sqlite3',
+      ['-readonly', '-cmd', '.timeout 1000', '-json', dbPath, sql],
+      { timeout: 3000, maxBuffer: 4 * 1024 * 1024 }
+    );
+    if (!stdout || !stdout.trim()) return [];
+    const parsed = JSON.parse(stdout);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function extractOpenCodeContentText(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts = [];
+  for (const b of content) {
+    if (!b || typeof b !== 'object') continue;
+    if (b.type === 'text' && typeof b.text === 'string' && b.text) {
+      parts.push(b.text);
+    }
+  }
+  return parts.join(' ');
+}
+
+function findRecentJsonFiles(rootDir, maxDepth = 2, limit = 24) {
+  const cutoff = Date.now() - MAX_AGE_MS;
+  const found = [];
+  function walk(dir, depth) {
+    if (depth > maxDepth) return;
+    let ents;
+    try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      if (e.name.startsWith('.')) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        walk(p, depth + 1);
+      } else if (e.isFile() && e.name.endsWith('.json')) {
+        try {
+          const st = fs.statSync(p);
+          if (st.mtimeMs >= cutoff && st.size > 0) {
+            found.push({ p, mtimeMs: st.mtimeMs });
+          }
+        } catch {}
+      }
+    }
+  }
+  walk(rootDir, 0);
+  return found.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, limit);
+}
+
+async function collectOpenCode(ctx) {
+  const { dbPath, legacySessionDir } = getOpenCodePaths();
+  const now = Date.now();
+  const cutoffMs = Math.floor(now - MAX_AGE_MS);
+  const items = [];
+
+  if (fs.existsSync(dbPath)) {
+    const tables = await runSqliteJson(
+      dbPath,
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('session_v2','session','session_message','message','part')"
+    );
+    const tableNames = new Set(tables.map((t) => String(t?.name || '')).filter(Boolean));
+
+    // Path A: OpenCode v2 (session_v2 + session_message)
+    if (tableNames.has('session_v2')) {
+      const rows = await runSqliteJson(
+        dbPath,
+        `SELECT id, parent_id, directory, title, time_created, time_updated, time_idle, idle_outcome FROM session_v2 WHERE time_archived IS NULL AND time_updated >= ${cutoffMs} ORDER BY time_updated DESC LIMIT 36`
+      );
+      if (rows.length > 0) {
+        const latestMsgBySession = new Map();
+        const replyBySession = new Map();
+        if (tableNames.has('session_message')) {
+          const msgs = await runSqliteJson(
+            dbPath,
+            `SELECT session_id, seq, data FROM session_message WHERE type = 'assistant' AND time_updated >= ${cutoffMs} ORDER BY seq DESC LIMIT 200`
+          );
+          for (const m of msgs) {
+            const sid = String(m?.session_id || '');
+            if (!sid) continue;
+            let dataObj = null;
+            try { dataObj = typeof m.data === 'string' ? JSON.parse(m.data) : m.data; } catch {}
+            if (!latestMsgBySession.has(sid) && dataObj) {
+              latestMsgBySession.set(sid, dataObj);
+            }
+            if (!replyBySession.has(sid) && dataObj) {
+              const txt = cleanText(extractOpenCodeContentText(dataObj.content), 240);
+              if (txt) replyBySession.set(sid, txt);
+            }
+          }
+        }
+        for (const row of rows) {
+          const id = String(row?.id || '').trim();
+          if (!id) continue;
+          const updatedMs = Number(row.time_updated || row.time_created || 0);
+          const timeIdle = Number(row.time_idle || 0);
+          const isRecent = (now - updatedMs) < RUNNING_WINDOW_MS;
+          const idleAfterUpdate = timeIdle > 0 && timeIdle >= updatedMs - 500;
+          const latestAssistant = latestMsgBySession.get(id);
+          const assistantCompleted = Boolean(latestAssistant?.time?.completed);
+          const running = isRecent && !idleAfterUpdate && !assistantCompleted;
+          const isSubagent = Boolean(row.parent_id);
+          const cwd = typeof row.directory === 'string' ? row.directory : '';
+          const title = cleanText(row.title, 64) || `OpenCode 会话 ${id.slice(0, 10)}`;
+          const project = projectFromCwd(cwd, 'OpenCode');
+          const lastReply = replyBySession.get(id) || '';
+          const continueCmd = cwd
+            ? `cd -- ${shQuote(cwd)} && opencode --session ${shQuote(id)}`
+            : `opencode --session ${shQuote(id)}`;
+
+          if (!isSubagent && ctx?.dispatches?.opencode && (updatedMs >= ctx.todayStartMs || running)) {
+            ctx.dispatches.opencode.user = (ctx.dispatches.opencode.user || 0) + 1;
+          }
+          items.push({
+            id,
+            jobId: '',
+            cwd,
+            title,
+            project,
+            running,
+            waiting: false,
+            delegated: false,
+            delegatedBy: null,
+            isSubagent,
+            subagentCount: 0,
+            updatedAt: Math.round(updatedMs / 1000),
+            lastReply: lastReply || (running ? '正在执行中…' : '暂无文字回复摘要'),
+            continueCmd,
+          });
+        }
+      }
+    }
+
+    // Path B: OpenCode v1 (session + message + part)
+    if (items.length === 0 && tableNames.has('session')) {
+      const rows = await runSqliteJson(
+        dbPath,
+        `SELECT id, parent_id, directory, title, time_created, time_updated FROM session WHERE time_archived IS NULL AND time_updated >= ${cutoffMs} ORDER BY time_updated DESC LIMIT 36`
+      );
+      if (rows.length > 0) {
+        const latestCompletedBySession = new Map();
+        const replyBySession = new Map();
+        if (tableNames.has('message') && tableNames.has('part')) {
+          const msgs = await runSqliteJson(
+            dbPath,
+            `SELECT id, session_id, time_updated, data FROM message WHERE time_updated >= ${cutoffMs} ORDER BY time_created DESC LIMIT 200`
+          );
+          const parts = await runSqliteJson(
+            dbPath,
+            `SELECT message_id, session_id, data FROM part WHERE time_updated >= ${cutoffMs} ORDER BY time_created DESC LIMIT 300`
+          );
+          const textByMsgId = new Map();
+          for (const p of parts) {
+            const mid = String(p?.message_id || '');
+            if (!mid) continue;
+            let pData = null;
+            try { pData = typeof p.data === 'string' ? JSON.parse(p.data) : p.data; } catch {}
+            if (!pData || pData.type !== 'text' || !pData.text) continue;
+            const prev = textByMsgId.get(mid);
+            textByMsgId.set(mid, prev ? `${pData.text} ${prev}` : pData.text);
+          }
+          for (const m of msgs) {
+            const sid = String(m?.session_id || '');
+            const mid = String(m?.id || '');
+            if (!sid) continue;
+            let mData = null;
+            try { mData = typeof m.data === 'string' ? JSON.parse(m.data) : m.data; } catch {}
+            if (mData?.role === 'assistant') {
+              if (!latestCompletedBySession.has(sid)) {
+                latestCompletedBySession.set(sid, Boolean(mData.time?.completed));
+              }
+              if (!replyBySession.has(sid) && mid && textByMsgId.has(mid)) {
+                const txt = cleanText(textByMsgId.get(mid), 240);
+                if (txt) replyBySession.set(sid, txt);
+              }
+            }
+          }
+        }
+        for (const row of rows) {
+          const id = String(row?.id || '').trim();
+          if (!id) continue;
+          const updatedMs = Number(row.time_updated || row.time_created || 0);
+          const isRecent = (now - updatedMs) < RUNNING_WINDOW_MS;
+          const assistantCompleted = Boolean(latestCompletedBySession.get(id));
+          const running = isRecent && !assistantCompleted;
+          const isSubagent = Boolean(row.parent_id);
+          const cwd = typeof row.directory === 'string' ? row.directory : '';
+          const title = cleanText(row.title, 64) || `OpenCode 会话 ${id.slice(0, 10)}`;
+          const project = projectFromCwd(cwd, 'OpenCode');
+          const lastReply = replyBySession.get(id) || '';
+          const continueCmd = cwd
+            ? `cd -- ${shQuote(cwd)} && opencode --session ${shQuote(id)}`
+            : `opencode --session ${shQuote(id)}`;
+
+          if (!isSubagent && ctx?.dispatches?.opencode && (updatedMs >= ctx.todayStartMs || running)) {
+            ctx.dispatches.opencode.user = (ctx.dispatches.opencode.user || 0) + 1;
+          }
+          items.push({
+            id,
+            jobId: '',
+            cwd,
+            title,
+            project,
+            running,
+            waiting: false,
+            delegated: false,
+            delegatedBy: null,
+            isSubagent,
+            subagentCount: 0,
+            updatedAt: Math.round(updatedMs / 1000),
+            lastReply: lastReply || (running ? '正在执行中…' : '暂无文字回复摘要'),
+            continueCmd,
+          });
+        }
+      }
+    }
+  } else if (fs.existsSync(legacySessionDir)) {
+    // Path C: Legacy JSON fallback (storage/session)
+    const files = findRecentJsonFiles(legacySessionDir, 2, 24);
+    for (const f of files) {
+      try {
+        const s = JSON.parse(fs.readFileSync(f.p, 'utf8'));
+        const id = String(s?.id || path.basename(f.p, '.json')).trim();
+        if (!id) continue;
+        const updatedMs = Number(s?.time?.updated || s?.time?.created || f.mtimeMs);
+        const running = (now - updatedMs) < RUNNING_WINDOW_MS;
+        const isSubagent = Boolean(s?.parentID || s?.parentId);
+        const cwd = typeof s?.directory === 'string' ? s.directory : '';
+        const title = cleanText(s?.title, 64) || `OpenCode 会话 ${id.slice(0, 10)}`;
+        const project = projectFromCwd(cwd, 'OpenCode');
+        const continueCmd = cwd
+          ? `cd -- ${shQuote(cwd)} && opencode --session ${shQuote(id)}`
+          : `opencode --session ${shQuote(id)}`;
+
+        if (!isSubagent && ctx?.dispatches?.opencode && (updatedMs >= ctx.todayStartMs || running)) {
+          ctx.dispatches.opencode.user = (ctx.dispatches.opencode.user || 0) + 1;
+        }
+        items.push({
+          id,
+          jobId: '',
+          cwd,
+          title,
+          project,
+          running,
+          waiting: false,
+          delegated: false,
+          delegatedBy: null,
+          isSubagent,
+          subagentCount: 0,
+          updatedAt: Math.round(updatedMs / 1000),
+          lastReply: running ? '正在执行中…' : '暂无文字回复摘要',
+          continueCmd,
+        });
+      } catch {}
+    }
+  }
+
+  return selectRecentItems(items, 12);
+}
+
+const EXTERNAL_PROVIDERS = [
+  {
+    key: 'claude',
+    slot: 1,
+    collect: (ctx) => collectClaude(ctx),
+    detect: (ctx) => fs.existsSync(path.join(HOME, '.claude/projects')) || ctx.activeJobs.claude.length > 0,
+    lastActiveMs: (items) => Math.max(safeMtimeMs(path.join(HOME, '.claude/projects')), maxItemMs(items)),
+  },
+  {
+    key: 'codex',
+    slot: 2,
+    collect: (ctx) => collectCodex(ctx),
+    detect: (ctx) => fs.existsSync(path.join(HOME, '.codex/sessions')) || ctx.activeJobs.codex.length > 0,
+    lastActiveMs: (items) => Math.max(safeMtimeMs(path.join(HOME, '.codex/sessions')), maxItemMs(items)),
+  },
+  {
+    key: 'opencode',
+    slot: 3,
+    collect: (ctx) => collectOpenCode(ctx),
+    detect: () => {
+      const { dbPath, legacySessionDir } = getOpenCodePaths();
+      return fs.existsSync(dbPath) || fs.existsSync(legacySessionDir);
+    },
+    lastActiveMs: (items) => {
+      const { dbPath, walPath, legacySessionDir } = getOpenCodePaths();
+      return Math.max(safeMtimeMs(dbPath), safeMtimeMs(walPath), safeMtimeMs(legacySessionDir), maxItemMs(items));
+    },
+  },
+  {
+    key: 'dsh',
+    slot: 3,
+    collect: (ctx) => collectDsh(ctx),
+    detect: (ctx) => fs.existsSync(path.join(HOME, '.agents/skills/dsh-session-bridge/scripts/dsh-session.mjs')) || ctx.activeJobs.dsh.length > 0,
+    lastActiveMs: (items) => Math.max(
+      safeMtimeMs(path.join(HOME, '.dsh/sessions')),
+      safeMtimeMs(path.join(HOME, '.dsh/bridge-reviews')),
+      maxItemMs(items),
+    ),
+  },
+];
+
 function collectUsageHistory() {
   const fp = path.join(HOME, '.config/howmanyusage/usage-history.json');
   if (!fs.existsSync(fp)) return null;
@@ -712,7 +1055,10 @@ let lastSnapshot = {
   claude: [],
   codex: [],
   dsh: [],
-  dispatches: { agy: {}, claude: {}, codex: {}, dsh: {} },
+  opencode: [],
+  providers: {},
+  slot3Preferred: '',
+  dispatches: { agy: {}, claude: {}, codex: {}, dsh: {}, opencode: {} },
   usageHistory: null,
   quotas: null,
   collectedAt: 0,
@@ -727,15 +1073,18 @@ export async function getExternalAgentsSnapshot(minIntervalMs = 6000) {
   collecting = true;
   try {
     const ctx = collectDispatchContext();
-    const names = ['claude', 'codex', 'dsh', 'usageHistory', 'quotas'];
+    const names = [...EXTERNAL_PROVIDERS.map((p) => p.key), 'usageHistory', 'quotas'];
     const settled = await Promise.allSettled([
-      Promise.resolve().then(() => collectClaude(ctx)),
-      Promise.resolve().then(() => collectCodex(ctx)),
-      collectDsh(ctx),
+      ...EXTERNAL_PROVIDERS.map((p) => Promise.resolve().then(() => p.collect(ctx))),
       Promise.resolve().then(collectUsageHistory),
       Promise.resolve().then(collectHowManyState),
     ]);
-    const next = { ...lastSnapshot, dispatches: ctx.dispatches, collectedAt: Date.now() };
+    const next = {
+      ...lastSnapshot,
+      dispatches: ctx.dispatches,
+      slot3Preferred: String(process.env.AG_SLOT4_AGENT || '').trim().toLowerCase(),
+      collectedAt: Date.now(),
+    };
     settled.forEach((res, idx) => {
       if (res.status === 'fulfilled') {
         next[names[idx]] = res.value;
@@ -743,6 +1092,20 @@ export async function getExternalAgentsSnapshot(minIntervalMs = 6000) {
         console.error(`[office-collector] ${names[idx]} failed: ${res.reason?.message || res.reason}`);
       }
     });
+    const providers = {};
+    for (const p of EXTERNAL_PROVIDERS) {
+      providers[p.key] = {
+        key: p.key,
+        slot: p.slot,
+        installed: Boolean(
+          p.detect(ctx)
+          || (Array.isArray(next[p.key]) && next[p.key].length > 0)
+          || hasPositiveCount(ctx.dispatches[p.key])
+        ),
+        lastActiveMs: Number(p.lastActiveMs(next[p.key]) || 0),
+      };
+    }
+    next.providers = providers;
     lastSnapshot = next;
     return lastSnapshot;
   } catch (err) {

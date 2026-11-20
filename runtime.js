@@ -21,11 +21,12 @@
   let mutDebounce = null;
   let ringRaf = 0;
   let studioFilter = 'all';
-  let selectedStation = null; // 'agy' | 'claude' | 'codex' | 'dsh' | 'rack' | 'board' | null
+  let selectedStation = null; // 'agy' | 'claude' | 'codex' | 'opencode' | 'dsh' | 'open' | 'rack' | 'board' | null
   let pointerDownInsidePop = false;
   let salutingStations = new Map(); // key -> phrase
   let saluteTimer = null;
   let lastStationMap = null;
+  let lastActiveSlots = null;
 
   function closestEl(target, selector) {
     const el = target instanceof Element ? target : target?.parentElement;
@@ -438,10 +439,11 @@
       const lastMod = Number(s.lastModifiedTime?.seconds || 0);
       let isHandoffFromPeer = false;
       if (lastMod >= todayStart) {
-        const hm = title.match(/继续处理来自\s*(Claude|ChatGPT|DeepSeek)\s*的任务/i);
+        const hm = title.match(/继续处理来自\s*(Claude|ChatGPT|DeepSeek|OpenCode)\s*的任务/i);
         if (hm) {
           isHandoffFromPeer = true;
-          const fk = hm[1].toLowerCase() === 'claude' ? 'claude' : hm[1].toLowerCase() === 'chatgpt' ? 'codex' : 'dsh';
+          const rawFrom = hm[1].toLowerCase();
+          const fk = rawFrom === 'claude' ? 'claude' : rawFrom === 'chatgpt' ? 'codex' : rawFrom === 'opencode' ? 'opencode' : 'dsh';
           handoffFromConvos[fk] = (handoffFromConvos[fk] || 0) + 1;
         }
       }
@@ -532,39 +534,177 @@
     agy: { name: 'Gemini', cover: '#7c8cf8', spine: '#4f46e5', pages: '#eef2ff', stroke: '#312e81' },
     claude: { name: 'Claude', cover: '#eb9476', spine: '#c85a38', pages: '#fff7ed', stroke: '#7c2d12' },
     codex: { name: 'ChatGPT', cover: '#b56cf6', spine: '#7e22ce', pages: '#faf5ff', stroke: '#581c87' },
+    opencode: { name: 'OpenCode', cover: '#34d399', spine: '#059669', pages: '#ecfdf5', stroke: '#064e3b' },
     dsh: { name: 'DeepSeek', cover: '#38bdf8', spine: '#0369a1', pages: '#f0f9ff', stroke: '#0c4a6e' },
   };
 
-  const INTERNS = [
+  const DESK_SLOTS = [
     {
-      key: 'agy', name: 'Gemini', x: 255, y: 214,
-      shirt: '#5b6ef5', hair: '#252834', accent: '#5b6ef5',
-      deskTop: '#ffffff', deskSide: '#dce2ec',
-      pointDir: 'right',
+      slot: 0, fixedKey: 'agy', x: 255, y: 214,
+      deskTop: '#ffffff', deskSide: '#dce2ec', pointDir: 'right',
       holoStyle: 'left:33.3%;top:39.3%;--ag-holo-ty:-45%;--ag-holo-pin:45%;width:min(348px,64%);max-height:78%;',
     },
     {
-      key: 'claude', name: 'Claude', x: 462, y: 204,
-      shirt: '#d97757', hair: '#4a3228', accent: '#d97757',
-      deskTop: '#ffffff', deskSide: '#dce2ec',
-      pointDir: 'left',
+      slot: 1, fixedKey: 'claude', x: 462, y: 204,
+      deskTop: '#ffffff', deskSide: '#dce2ec', pointDir: 'left',
       holoStyle: 'right:51.1%;top:37.0%;--ag-holo-ty:-45%;--ag-holo-pin:45%;width:min(348px,47%);max-height:78%;',
     },
     {
-      key: 'codex', name: 'ChatGPT', x: 332, y: 326,
-      shirt: '#9333ea', hair: '#1e242b', accent: '#9333ea',
-      deskTop: '#ffffff', deskSide: '#dce2ec',
-      pointDir: 'right',
+      slot: 2, fixedKey: 'codex', x: 332, y: 326,
+      deskTop: '#ffffff', deskSide: '#dce2ec', pointDir: 'right',
       holoStyle: 'left:41.6%;top:65.0%;--ag-holo-ty:-62%;--ag-holo-pin:62%;width:min(348px,56%);max-height:74%;',
     },
     {
-      key: 'dsh', name: 'DeepSeek', x: 590, y: 316,
-      shirt: '#0284c7', hair: '#2c3040', accent: '#0284c7',
-      deskTop: '#ffffff', deskSide: '#dce2ec',
-      pointDir: 'left',
+      slot: 3, fixedKey: null, x: 590, y: 316,
+      deskTop: '#ffffff', deskSide: '#dce2ec', pointDir: 'left',
       holoStyle: 'right:37.2%;top:62.7%;--ag-holo-ty:-60%;--ag-holo-pin:60%;width:min(348px,60%);max-height:74%;',
     },
   ];
+
+  const AGENT_PROFILES = {
+    agy: {
+      key: 'agy', name: 'Gemini',
+      shirt: '#5b6ef5', hair: '#252834', accent: '#5b6ef5',
+    },
+    claude: {
+      key: 'claude', name: 'Claude',
+      shirt: '#d97757', hair: '#4a3228', accent: '#d97757',
+      installTitle: '未检测到 Claude Code 本地会话',
+      installHint: '安装并运行 Claude Code 后，检测到该目录将自动入驻此工位。',
+      installPath: '~/.claude/projects',
+    },
+    codex: {
+      key: 'codex', name: 'ChatGPT',
+      shirt: '#9333ea', hair: '#1e242b', accent: '#9333ea',
+      installTitle: '未检测到 Codex CLI 本地会话',
+      installHint: '安装并运行 OpenAI Codex CLI 后，检测到该目录将自动入驻此工位。',
+      installPath: '~/.codex/sessions',
+    },
+    opencode: {
+      key: 'opencode', name: 'OpenCode',
+      shirt: '#10b981', hair: '#1f2937', accent: '#10b981',
+      installTitle: '未检测到 OpenCode 本地会话',
+      installHint: '安装并运行 OpenCode 后，检测到本地会话库将自动入驻此工位。',
+      installPath: '~/.local/share/opencode/opencode.db',
+    },
+    dsh: {
+      key: 'dsh', name: 'DeepSeek',
+      shirt: '#0284c7', hair: '#2c3040', accent: '#0284c7',
+      installTitle: '未检测到 DeepSeek (DSH) 会话桥接',
+      installHint: '配置 dsh-session-bridge 或本地审查目录后将自动入驻此工位。',
+      installPath: '~/.dsh/bridge-reviews',
+    },
+    open: {
+      key: 'open', name: '开放工位',
+      shirt: '#64748b', hair: '#334155', accent: '#64748b',
+      vacantTitle: '4 号开放工位 · 虚位以待',
+    },
+  };
+
+  const SLOT3_CANDIDATES = ['opencode', 'dsh'];
+
+  function getSlot3Pref() {
+    try {
+      const v = localStorage.getItem('ag-lite-office-slot3') || 'auto';
+      return v === 'opencode' || v === 'dsh' ? v : 'auto';
+    } catch {
+      return 'auto';
+    }
+  }
+
+  function setSlot3Pref(val) {
+    try {
+      const next = val === 'opencode' || val === 'dsh' ? val : 'auto';
+      localStorage.setItem('ag-lite-office-slot3', next);
+    } catch {}
+  }
+
+  function hasAnyStationTasks(d) {
+    return Boolean(d && (d.waiting?.length || d.running?.length || d.unread?.length || d.subagentTotal > 0));
+  }
+
+  function hasPositiveDispatch(map) {
+    return Object.values(map || {}).some((n) => Number(n) > 0);
+  }
+
+  function isProviderInstalled(key, ext, stationMap) {
+    if (key === 'agy') return true;
+    const hasEvidence = hasAnyStationTasks(stationMap?.[key])
+      || (Array.isArray(ext?.[key]) && ext[key].length > 0)
+      || hasPositiveDispatch(ext?.dispatches?.[key]);
+    if (ext?.providers && Object.prototype.hasOwnProperty.call(ext.providers, key)) {
+      return Boolean(ext.providers[key]?.installed) || hasEvidence;
+    }
+    return hasEvidence;
+  }
+
+  function latestStationSec(d) {
+    let maxSec = 0;
+    for (const arr of [d?.waiting, d?.running, d?.unread]) {
+      for (const item of Array.isArray(arr) ? arr : []) {
+        const s = Number(item?.updatedAt || 0);
+        if (s > maxSec) maxSec = s;
+      }
+    }
+    return maxSec;
+  }
+
+  function resolveSlot3(ext, stationMap, usageHistory) {
+    const installedCandidates = SLOT3_CANDIDATES.filter((k) => isProviderInstalled(k, ext, stationMap));
+    if (installedCandidates.length === 0) {
+      return { key: 'open', installed: false, installedCandidates: [] };
+    }
+    if (installedCandidates.length === 1) {
+      return { key: installedCandidates[0], installed: true, installedCandidates };
+    }
+    const envPref = String(ext?.slot3Preferred || '').trim().toLowerCase();
+    if (envPref && installedCandidates.includes(envPref)) {
+      return { key: envPref, installed: true, installedCandidates };
+    }
+    const userPref = getSlot3Pref();
+    if (userPref && userPref !== 'auto' && installedCandidates.includes(userPref)) {
+      return { key: userPref, installed: true, installedCandidates };
+    }
+
+    const recentDays = Array.isArray(usageHistory?.days) ? usageHistory.days.slice(-7) : [];
+    const dshWeekTokens = recentDays.reduce((sum, day) => sum + Number(day?.deepseek || 0), 0);
+
+    const scored = installedCandidates.map((k, idx) => {
+      const d = stationMap?.[k];
+      const activeRank = d && (d.waiting.length > 0 || d.running.length > 0 || d.subagentTotal > 0)
+        ? 3
+        : (d && d.unread.length > 0) ? 2 : 0;
+      const recentActivityMs = Math.max(latestStationSec(d) * 1000, Number(ext?.providers?.[k]?.lastActiveMs || 0));
+      const histTokens = k === 'dsh' ? dshWeekTokens : 0;
+      return { k, idx, activeRank, recentActivityMs, histTokens };
+    }).sort((a, b) =>
+      (b.activeRank - a.activeRank)
+      || (b.recentActivityMs - a.recentActivityMs)
+      || (b.histTokens - a.histTokens)
+      || (a.idx - b.idx)
+    );
+
+    return { key: scored[0].k, installed: true, installedCandidates };
+  }
+
+  function resolveActiveSlots(ext, stationMap, usageHistory) {
+    const slot3 = resolveSlot3(ext, stationMap, usageHistory);
+    return DESK_SLOTS.map((slot) => {
+      if (slot.fixedKey) {
+        const profile = AGENT_PROFILES[slot.fixedKey];
+        const installed = isProviderInstalled(slot.fixedKey, ext, stationMap);
+        return { ...slot, ...profile, installed, isOpenSlot: false, installedCandidates: [] };
+      }
+      const profile = AGENT_PROFILES[slot3.key] || AGENT_PROFILES.open;
+      return {
+        ...slot,
+        ...profile,
+        installed: slot3.installed,
+        isOpenSlot: true,
+        installedCandidates: slot3.installedCandidates,
+      };
+    });
+  }
 
   function getStrikeInfo(quota) {
     if (!quota) return null;
@@ -676,6 +816,12 @@
       // OpenAI official interlocking 6-petal blossom knot
       return `<path fill="#9333EA" d="M22.28 9.82a5.98 5.98 0 0 0-.52-4.91 6.05 6.05 0 0 0-6.51-2.9A6.07 6.07 0 0 0 4.98 4.18a5.98 5.98 0 0 0-4 2.9 6.05 6.05 0 0 0 .74 7.1 5.98 5.98 0 0 0 .51 4.91 6.05 6.05 0 0 0 6.51 2.9A5.98 5.98 0 0 0 13.26 24a6.06 6.06 0 0 0 5.77-4.21 5.99 5.99 0 0 0 4-2.9 6.06 6.06 0 0 0-.75-7.07zM13.26 22.43a4.48 4.48 0 0 1-2.88-1.04l.14-.08 4.78-2.76a.8.8 0 0 0 .39-.68v-6.74l2.02 1.17a.07.07 0 0 1 .04.05v5.58a4.5 4.5 0 0 1-4.49 4.5zm-9.66-4.13a4.47 4.47 0 0 1-.53-3.01l.14.09 4.78 2.76a.77.77 0 0 0 .78 0l5.84-3.37v2.33a.08.08 0 0 1-.03.06l-4.84 2.79a4.5 4.5 0 0 1-6.14-1.65zM2.34 7.9a4.49 4.49 0 0 1 2.37-1.97V11.6a.77.77 0 0 0 .39.68l5.81 3.35-2.02 1.17a.08.08 0 0 1-.07 0l-4.83-2.79A4.5 4.5 0 0 1 2.34 7.9zm16.6 3.86L13.1 8.36l2.02-1.16a.08.08 0 0 1 .07 0l4.83 2.79a4.49 4.49 0 0 1-.68 8.1v-5.68a.79.79 0 0 0-.4-.65zm2.01-3.02-.14-.09-4.77-2.78a.78.78 0 0 0-.79 0L9.41 9.23V6.9a.07.07 0 0 1 .03-.06l4.83-2.79a4.5 4.5 0 0 1 6.68 4.66zM8.31 12.86l-2.02-1.16a.08.08 0 0 1-.04-.06V6.07a4.5 4.5 0 0 1 7.38-3.45l-.14.08L8.7 5.46a.8.8 0 0 0-.39.68zm1.1-2.37 2.6-1.5 2.6 1.5v3l-2.6 1.5-2.6-1.5z"/>`;
     }
+    if (key === 'opencode') {
+      return `<rect x="3" y="3" width="18" height="18" rx="3.5" fill="none" stroke="#10B981" stroke-width="2.4"/><rect x="8.5" y="8.5" width="7" height="7" rx="1" fill="#10B981"/>`;
+    }
+    if (key === 'open') {
+      return `<rect x="3" y="3" width="18" height="18" rx="4" fill="none" stroke="#64748B" stroke-width="1.8" stroke-dasharray="3.2 2.2"/><path d="M12 7.5v9M7.5 12h9" stroke="#64748B" stroke-width="2" stroke-linecap="round"/>`;
+    }
     // DeepSeek iconic whale silhouette
     return `<path fill="#0284C7" d="M21.4 10.6c-.7-3.4-3.7-5.8-7.4-5.8-3.1 0-5.8 1.8-7 4.4-.5 1.1-1.3 1.7-2.4 1.5-.8-.1-1.5-.7-2.1-1.6-.2-.3-.6-.1-.6.3-.1 1.7.5 3.1 1.6 4.1-.7.7-1.1 1.5-1.2 2.4 0 .4.4.6.7.4 1.1-.7 2.1-1 3.1-.9 1.6 2.1 4.3 3.4 7.4 3.4 4.7 0 8.3-3.2 8.3-7.3 0-.3 0-.6-.4-.9z"/><circle cx="16.4" cy="10.8" r="1.25" fill="#ffffff"/><path d="M13.5 14.2c1.2.8 3 .8 4.2 0" fill="none" stroke="#ffffff" stroke-width="1.2" stroke-linecap="round"/>`;
   }
@@ -708,6 +854,12 @@
         <line x1="0" y1="-4.8" x2="0" y2="-1.7"/>
         <line x1="4.2" y1="2.4" x2="1.4" y2="0.8"/>
         <line x1="-4.2" y1="2.4" x2="-1.4" y2="0.8"/>
+      </g>`;
+    }
+    if (key === 'opencode') {
+      return `<g transform="translate(14, -10)">
+        <rect x="-4.4" y="-4.4" width="8.8" height="8.8" rx="1.4" fill="none" stroke="#ffffff" stroke-width="1.4"/>
+        <rect x="-1.9" y="-1.9" width="3.8" height="3.8" rx="0.5" fill="#ffffff"/>
       </g>`;
     }
     return `<g transform="translate(14, -10)">
@@ -750,7 +902,7 @@
     return (d.getUTCDay() + 6) % 7;
   }
 
-  function computeBoardStats(usageHistory) {
+  function computeBoardStats(usageHistory, installedKeys = null) {
     const days = Array.isArray(usageHistory?.days) ? usageHistory.days : [];
     const recent = days.slice(-7);
     const sums = { agy: 0, claude: 0, codex: 0, dsh: 0 };
@@ -778,16 +930,19 @@
       codex: { name: 'ChatGPT', full: 'ChatGPT', color: '#9333ea' },
       dsh: { name: 'DeepSeek', full: 'DeepSeek', color: '#0284c7' },
     };
-    const ranking = Object.entries(sums)
+    const allRanking = Object.entries(sums)
       .map(([key, tokens]) => ({ key, tokens, ...meta[key] }))
       .sort((a, b) => b.tokens - a.tokens);
+    const ranking = installedKeys instanceof Set
+      ? allRanking.filter((r) => r.tokens > 0 || installedKeys.has(r.key) || r.key === 'agy')
+      : allRanking;
     const champion = ranking[0] && ranking[0].tokens > 0 ? ranking[0] : null;
     return { sums, ranking, champion, weekPrompts, avgPrompts, todayPrompts, todayTokens };
   }
 
-  function drawSalesBoardSvg(usageHistory, isDark, box) {
+  function drawSalesBoardSvg(usageHistory, isDark, box, installedKeys = null) {
     const { x, y, w, h, compact } = box;
-    const stats = computeBoardStats(usageHistory);
+    const stats = computeBoardStats(usageHistory, installedKeys);
     const ink = isDark ? '#f1f5f9' : '#262830';
     const muted = isDark ? '#94a3b8' : '#64748b';
     const red = isDark ? '#f87171' : '#dc2626';
@@ -961,7 +1116,7 @@
     </g>`;
   }
 
-  function drawWallWhiteboard(usageHistory, isDark) {
+  function drawWallWhiteboard(usageHistory, isDark, installedKeys = null) {
     const bg = isDark ? '#1e222b' : '#fffdf8';
     const frame = isDark ? '#475569' : '#c5bdb0';
     const ink = isDark ? '#e2e8f0' : '#334155';
@@ -1024,7 +1179,7 @@
       </g>`;
     }
 
-    const stats = computeBoardStats(usageHistory);
+    const stats = computeBoardStats(usageHistory, installedKeys);
     const top3 = stats.ranking.slice(0, 3);
     const pct = Math.min(1, stats.todayPrompts / stats.avgPrompts);
     const exceeded = stats.todayPrompts >= stats.avgPrompts;
@@ -1045,13 +1200,11 @@
 
       <!-- Left: Pixel 3-Step Champion Podium -->
       <g shape-rendering="crispEdges">
-        <!-- #2 Left block -->
-        <rect x="${bx + 18}" y="${by + 30}" width="18" height="18" fill="${c2}" fill-opacity="0.88"/>
+        ${top3[1] ? `<rect x="${bx + 18}" y="${by + 30}" width="18" height="18" fill="${c2}" fill-opacity="0.88"/>` : ''}
         <!-- #1 Center Champion block + pixel crown -->
         <rect x="${bx + 38}" y="${by + 20}" width="20" height="28" fill="${c1}" fill-opacity="0.92"/>
         <polygon points="${bx + 42},${by + 18} ${bx + 43},${by + 12} ${bx + 46},${by + 15} ${bx + 48},${by + 11} ${bx + 50},${by + 15} ${bx + 53},${by + 12} ${bx + 54},${by + 18}" fill="#fbbf24" stroke="#b45309" stroke-width="0.9"/>
-        <!-- #3 Right block -->
-        <rect x="${bx + 60}" y="${by + 36}" width="18" height="12" fill="${c3}" fill-opacity="0.88"/>
+        ${top3[2] ? `<rect x="${bx + 60}" y="${by + 36}" width="18" height="12" fill="${c3}" fill-opacity="0.88"/>` : ''}
         <!-- Base line -->
         <rect x="${bx + 14}" y="${by + 48}" width="68" height="2" fill="${frame}"/>
       </g>
@@ -1168,8 +1321,57 @@
     };
   }
 
-  function drawIsoStation(cfg, data, championKey, quota, dispatchMap, isSelected = false) {
+  function drawIsoStation(cfg, data, championKey, quota, dispatchMap, isSelected = false, isDark = false) {
     const { key, x, y, shirt, hair, deskTop, deskSide } = cfg;
+    const labelWidthUnits = [...cfg.name].reduce((sum, ch) => sum + (/[\u3400-\u9fff]/.test(ch) ? 1.85 : 1), 0);
+    const cw = Math.max(21, Math.round(labelWidthUnits * 3.0 + 4));
+    const hw = cw / 2;
+    const ch = 9.8;
+
+    if (!cfg.installed) {
+      const vacantTip = cfg.key === 'open'
+        ? '开放工位 · 虚位以待（支持 OpenCode / DSH，点击查看接入方式）'
+        : `${cfg.name} · 空工位待入驻（点击查看接入方式）`;
+      const screenOff = isDark ? '#0f172a' : '#1e293b';
+      const vacantPlateBg = isDark ? '#2d3340' : '#f8fafc';
+      const vacantPlateSide = isDark ? '#222630' : '#e2e8f0';
+      return `<g class="ag-iso-clickable" data-ag-station="${key}" transform="translate(${x}, ${y})">
+        <!-- Floor Shadow -->
+        <polygon points="-50,14 2,-12 52,14 0,40" fill="rgba(38,40,48,0.06)"/>
+        <!-- Empty Rolling Chair (back-right) -->
+        <g opacity="0.72">
+          <ellipse cx="22" cy="10" rx="14" ry="7" fill="rgba(38,40,48,0.10)"/>
+          <line x1="22" y1="2" x2="22" y2="10" stroke="#475569" stroke-width="2.5"/>
+          <polygon points="10,-2 22,-8 34,-2 22,4" fill="#64748b" stroke="#334155" stroke-width="1.2"/>
+          <path d="M26,-4 L34,-22 L24,-27 L16,-9 Z" fill="#94a3b8" stroke="#334155" stroke-width="1.2"/>
+        </g>
+        <!-- 2.5D Isometric Desk + Powered-Off Monitor -->
+        <g opacity="0.92">
+          <line x1="-42" y1="8" x2="-42" y2="28" stroke="#64748b" stroke-width="2.4"/>
+          <line x1="-4" y1="26" x2="-4" y2="44" stroke="#64748b" stroke-width="2.4"/>
+          <line x1="42" y1="6" x2="42" y2="24" stroke="#64748b" stroke-width="2.4"/>
+          <polygon points="-46,4 0,-19 46,4 0,27" fill="${deskTop}" stroke="#64748b" stroke-width="1.3"/>
+          <polygon points="-46,4 0,27 0,32 -46,9" fill="${deskSide}" stroke="#64748b" stroke-width="1.1"/>
+          <polygon points="0,27 46,4 46,9 0,32" fill="#cbd5e1" stroke="#64748b" stroke-width="1.1"/>
+          <polygon points="-14,-37 10,-25 10,-7 -14,-19" fill="#334155" stroke="#1e293b" stroke-width="1.3"/>
+          <polygon points="-12,-34 8,-24 8,-10 -12,-20" fill="${screenOff}"/>
+          <line x1="-9" y1="-29" x2="3" y2="-17" stroke="rgba(148,163,184,0.22)" stroke-width="1.5" stroke-linecap="round"/>
+          <circle cx="6.5" cy="-12.5" r="0.9" fill="#475569"/>
+          <line x1="-2" y1="-13" x2="-2" y2="-6" stroke="#475569" stroke-width="2.6"/>
+          <polygon points="-8,-6 -2,-9 4,-6 -2,-3" fill="#64748b"/>
+          <polygon points="-4,0 10,-7 18,-3 4,4" fill="#e2e8f0" stroke="#64748b" stroke-width="1" opacity="0.8"/>
+        </g>
+        <!-- Dashed Tent Nameplate -->
+        <g shape-rendering="crispEdges" transform="translate(-15, 8.2) skewY(26.565)">
+          <title>${escHtml(vacantTip)}</title>
+          <polygon points="${(-hw + 1).toFixed(1)},${ch} ${(hw + 2.2).toFixed(1)},${ch} ${(hw + 3.4).toFixed(1)},${(ch - 1.6).toFixed(1)} ${(-hw + 2).toFixed(1)},${(ch - 1.6).toFixed(1)}" fill="rgba(38,40,48,0.08)"/>
+          <polygon points="${hw.toFixed(1)},0 ${(hw + 2.6).toFixed(1)},${(ch - 1.4).toFixed(1)} ${hw.toFixed(1)},${ch}" fill="${vacantPlateSide}" stroke="#94a3b8" stroke-width="0.7" stroke-linejoin="round"/>
+          <rect x="${(-hw).toFixed(1)}" y="0" width="${cw}" height="${ch}" rx="0.6" fill="${vacantPlateBg}" fill-opacity="0.92" stroke="${isSelected ? cfg.accent : '#94a3b8'}" stroke-width="${isSelected ? 1.1 : 0.8}" stroke-dasharray="${isSelected ? 'none' : '2 1.5'}"/>
+          <text x="0" y="6.8" text-anchor="middle" font-size="5" font-weight="600" fill="${isSelected ? cfg.accent : '#94a3b8'}">${escHtml(cfg.name)}</text>
+        </g>
+      </g>`;
+    }
+
     const waitN = data.waiting.length;
     const runN = data.running.length;
     const unreadN = data.unread.length;
@@ -1276,9 +1478,6 @@
     const blocksSvg = books.svg;
 
     // Subtle tall-narrow pixel conference tent nameplate angled toward the front edge of the desk
-    const cw = Math.max(21, Math.round(cfg.name.length * 3.0 + 4));
-    const hw = cw / 2;
-    const ch = 9.8;
     const stateLabel = state === 'waiting'
       ? '等待确认'
       : state === 'running'
@@ -1438,13 +1637,15 @@
     </g>`;
   }
 
-  function buildPopoverHtml(stationKey, stationMap, bgTasks, usageHistory, quotas, dispatches, isDark) {
+  function buildPopoverHtml(stationKey, activeSlots, stationMap, bgTasks, ext, dispatches, isDark, installedKeys) {
     if (!stationKey) return '';
+    const usageHistory = ext?.usageHistory || null;
+    const quotas = ext?.quotas || null;
     if (stationKey === 'board') {
       const hasHistory = Boolean(usageHistory?.days?.length);
-      const stats = computeBoardStats(usageHistory);
+      const stats = computeBoardStats(usageHistory, installedKeys);
       const chartSvg = hasHistory
-        ? `<svg viewBox="0 0 364 128" style="width:100%;height:auto;display:block;">${drawSalesBoardSvg(usageHistory, isDark, { x: 0, y: 0, w: 364, h: 128, compact: false })}</svg>`
+        ? `<svg viewBox="0 0 364 128" style="width:100%;height:auto;display:block;">${drawSalesBoardSvg(usageHistory, isDark, { x: 0, y: 0, w: 364, h: 128, compact: false }, installedKeys)}</svg>`
         : `<svg viewBox="0 0 364 128" style="width:100%;height:auto;display:block;">${drawPixelFallbackBoardSvg(isDark, { x: 0, y: 0, w: 364, h: 128 })}</svg>`;
       const footHtml = hasHistory
         ? `<span>本周销冠：👑 <strong style="color:var(--ag-of-ink);">${escHtml(stats.champion?.full || '—')}</strong></span>
@@ -1493,9 +1694,38 @@
       </div>`;
     }
 
-    const cfg = INTERNS.find((i) => i.key === stationKey);
-    const data = stationMap[stationKey];
-    if (!cfg || !data) return '';
+    const cfg = (Array.isArray(activeSlots) ? activeSlots : []).find((i) => i.key === stationKey);
+    if (!cfg) return '';
+
+    if (!cfg.installed) {
+      const isOpen = cfg.key === 'open';
+      const bodyHtml = isOpen
+        ? `<div class="ag-pop-item">
+            <div class="ag-pop-item-title">🪑 ${escHtml(cfg.vacantTitle)}</div>
+            <div class="ag-pop-onboard">
+              <div>当前内置自动识别以下开放工位候选（无需额外配置，运行后自动入驻）：</div>
+              <div class="ag-pop-onboard-row">${renderVendorBadgeHtml('opencode', 'ob-oc')}<strong>OpenCode</strong><code class="ag-pop-code">~/.local/share/opencode/opencode.db</code></div>
+              <div class="ag-pop-onboard-row">${renderVendorBadgeHtml('dsh', 'ob-dsh')}<strong>DeepSeek / DSH</strong><code class="ag-pop-code">~/.dsh/bridge-reviews</code></div>
+              <div style="margin-top:4px;font-size:11px;color:var(--ag-of-muted);">其它 CLI Agent 可通过 Provider 注册表继续扩展。</div>
+            </div>
+          </div>`
+        : `<div class="ag-pop-item">
+            <div class="ag-pop-item-title">🪑 ${escHtml(cfg.installTitle)}</div>
+            <div class="ag-pop-onboard">
+              <div>${escHtml(cfg.installHint)}</div>
+              ${cfg.installPath ? `<div style="margin-top:6px;">本地检测路径：<code class="ag-pop-code">${escHtml(cfg.installPath)}</code></div>` : ''}
+            </div>
+          </div>`;
+      return `<div class="ag-office-popover is-holo" data-ag-dir="${cfg.pointDir}" style="--ag-holo-accent:${cfg.accent};${cfg.holoStyle}">
+        <div class="ag-pop-head">
+          <span class="ag-pop-title">${renderVendorBadgeHtml(cfg.key)}${escHtml(cfg.name)} · ${isOpen ? '虚位以待' : '空工位'} <span class="ag-pop-stamp is-vacant">${isOpen ? '可扩展' : '待入驻'}</span></span>
+          <div class="ag-pop-actions"><button type="button" class="ag-pop-btn" data-ag-close-pop="1">收起</button></div>
+        </div>
+        <div class="ag-pop-body">${bodyHtml}</div>
+      </div>`;
+    }
+
+    const data = stationMap[stationKey] || { waiting: [], running: [], unread: [], subagentTotal: 0 };
     const isAgy = stationKey === 'agy';
     const activeItems = [...data.waiting.map((t) => ({ ...t, _st: 'waiting' })), ...data.running.map((t) => ({ ...t, _st: 'running' }))];
     const unreadItems = data.unread;
@@ -1578,6 +1808,19 @@
         </div>`
       : '';
 
+    const slotSwitchLine = cfg.isOpenSlot && Array.isArray(cfg.installedCandidates) && cfg.installedCandidates.length > 1
+      ? (() => {
+          const envForced = ext?.slot3Preferred && cfg.installedCandidates.includes(ext.slot3Preferred);
+          const curPref = envForced ? ext.slot3Preferred : getSlot3Pref();
+          const opts = [
+            ...(envForced ? [] : [{ val: 'auto', label: '自动' }]),
+            ...cfg.installedCandidates.map((k) => ({ val: k, label: AGENT_PROFILES[k]?.name || k })),
+          ];
+          const pills = opts.map((o) => `<button type="button" class="ag-slot-pill${curPref === o.val ? ' is-active' : ''}" data-ag-slot3-pref="${escHtml(o.val)}">${escHtml(o.label)}</button>`).join('');
+          return `<div class="ag-slot-switch"><span>4号位显示：</span>${pills}</div>`;
+        })()
+      : '';
+
     return `<div class="ag-office-popover is-holo" data-ag-dir="${cfg.pointDir}" style="--ag-holo-accent:${cfg.accent};${cfg.holoStyle}">
       <div class="ag-pop-head">
         <span class="ag-pop-title">${renderVendorBadgeHtml(cfg.key)}${cfg.name} · 状态投屏 ${stampHtml}</span>
@@ -1586,7 +1829,7 @@
           <button type="button" class="ag-pop-btn" data-ag-close-pop="1">收起</button>
         </div>
       </div>
-      <div class="ag-pop-body">${dispatchLine}${staminaLine}${sections.join('')}</div>
+      <div class="ag-pop-body">${slotSwitchLine}${dispatchLine}${staminaLine}${sections.join('')}</div>
     </div>`;
   }
 
@@ -1649,7 +1892,7 @@
     if (!h?.store) return;
     const st = h.store.getState();
     const agyData = collectAgyItems(st);
-    const ext = window.__agLiteExternalAgents || { claude: [], codex: [], dsh: [] };
+    const ext = window.__agLiteExternalAgents || { claude: [], codex: [], dsh: [], opencode: [], providers: {} };
     const readMarks = getReadMarks();
 
     const stationMap = {
@@ -1657,8 +1900,13 @@
       claude: buildExternalStation('claude', ext.claude, readMarks),
       codex: buildExternalStation('codex', ext.codex, readMarks),
       dsh: buildExternalStation('dsh', ext.dsh, readMarks),
+      opencode: buildExternalStation('opencode', ext.opencode, readMarks),
+      open: { waiting: [], running: [], unread: [], subagentTotal: 0 },
     };
+    const activeSlots = resolveActiveSlots(ext, stationMap, ext.usageHistory);
+    const installedKeys = new Set(activeSlots.filter((s) => s.installed).map((s) => s.key));
     lastStationMap = stationMap;
+    lastActiveSlots = activeSlots;
     const bgTasks = agyData.bgTasks;
 
     const rawDispatches = ext.dispatches || {};
@@ -1668,7 +1916,7 @@
     if (agyData.userDirectToday > 0) {
       agyDispatches.user = agyData.userDirectToday;
     }
-    for (const k of ['claude', 'codex', 'dsh']) {
+    for (const k of ['claude', 'codex', 'dsh', 'opencode']) {
       const cnt = Math.max(
         Number(agyDispatches[k] || 0),
         Number(convoAgyHandoffs[k] || 0),
@@ -1681,6 +1929,7 @@
       claude: rawDispatches.claude || {},
       codex: rawDispatches.codex || {},
       dsh: rawDispatches.dsh || {},
+      opencode: rawDispatches.opencode || {},
     };
 
     const uiTheme = st?.colorTheme?._jetskiThemeData?.uiTheme || '';
@@ -1691,6 +1940,8 @@
     const sig = JSON.stringify({
       isDark,
       selectedStation,
+      slot3Pref: getSlot3Pref(),
+      slot3Preferred: ext.slot3Preferred || '',
       saluting: [...salutingStations.entries()],
       timeBucket,
       histDays: ext.usageHistory?.days?.length || 0,
@@ -1698,10 +1949,12 @@
       quotas: ext.quotas || null,
       dispatches,
       bg: bgTasks.map((b) => [b.id, b.bgCount, b.updatedAt]),
-      stations: INTERNS.map((i) => {
-        const d = stationMap[i.key];
+      stations: activeSlots.map((s) => {
+        const d = stationMap[s.key] || { waiting: [], running: [], unread: [], subagentTotal: 0 };
         return [
-          i.key,
+          s.key,
+          s.installed,
+          s.installedCandidates,
           d.subagentTotal,
           d.waiting.map((x) => [x.id, x.updatedAt]),
           d.running.map((x) => [x.id, x.updatedAt]),
@@ -1782,7 +2035,8 @@
           ev.stopPropagation();
           salutingStations.clear();
           const cheers = ['收到！冲业绩！', '必拿下销冠！', '老板威武！', '随时开单！'];
-          for (const cfg of INTERNS) {
+          for (const cfg of (lastActiveSlots || [])) {
+            if (!cfg.installed) continue;
             const sd = lastStationMap && lastStationMap[cfg.key];
             if (sd && sd.waiting.length === 0 && sd.running.length === 0 && sd.unread.length === 0) {
               salutingStations.set(cfg.key, cheers[Math.floor(Math.random() * cheers.length)]);
@@ -1795,6 +2049,18 @@
             if (!destroyed) syncStudio();
           }, 2800);
           selectedStation = null;
+          syncStudio();
+          return;
+        }
+        const slotBtn = closestEl(ev.target, '[data-ag-slot3-pref]');
+        if (slotBtn) {
+          ev.stopPropagation();
+          const val = slotBtn.getAttribute('data-ag-slot3-pref') || 'auto';
+          setSlot3Pref(val);
+          const curExt = window.__agLiteExternalAgents || { claude: [], codex: [], dsh: [], opencode: [], providers: {} };
+          const nextSlots = resolveActiveSlots(curExt, lastStationMap || {}, curExt.usageHistory);
+          const nextSlot3 = nextSlots.find((s) => s.isOpenSlot);
+          if (nextSlot3) selectedStation = nextSlot3.key;
           syncStudio();
           return;
         }
@@ -1868,7 +2134,7 @@
       ${drawStudioSignboard(isDark)}
 
       <!-- Back-Wall Whiteboard with live howmanyusage Summary Charts -->
-      ${drawWallWhiteboard(ext.usageHistory, isDark)}
+      ${drawWallWhiteboard(ext.usageHistory, isDark, installedKeys)}
 
       <!-- Wooden Floor -->
       <polygon points="290,134 630,134 830,252 630,412 290,412 90,252" fill="var(--ag-of-floor)" stroke="var(--ag-of-wall-stroke)" stroke-width="1.5" stroke-linejoin="round"/>
@@ -1891,12 +2157,12 @@
 
       <!-- 4 Intern Isometric Workstations (back-to-front painter's order) -->
       ${(() => {
-        const champKey = computeBoardStats(ext.usageHistory).champion?.key || '';
-        return INTERNS.map((cfg) => drawIsoStation(cfg, stationMap[cfg.key], champKey, ext.quotas?.[cfg.key] || null, dispatches[cfg.key], selectedStation === cfg.key)).join('');
+        const champKey = computeBoardStats(ext.usageHistory, installedKeys).champion?.key || '';
+        return activeSlots.map((cfg) => drawIsoStation(cfg, stationMap[cfg.key] || { waiting: [], running: [], unread: [], subagentTotal: 0 }, champKey, ext.quotas?.[cfg.key] || null, dispatches[cfg.key] || {}, selectedStation === cfg.key, isDark)).join('');
       })()}
     </svg>`;
 
-    const popoverHtml = buildPopoverHtml(selectedStation, stationMap, bgTasks, ext.usageHistory, ext.quotas, dispatches, isDark);
+    const popoverHtml = buildPopoverHtml(selectedStation, activeSlots, stationMap, bgTasks, ext, dispatches, isDark, installedKeys);
     root.innerHTML = `<div class="ag-office-stage">${svgHtml}${popoverHtml}</div>`;
   }
 

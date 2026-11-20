@@ -20,7 +20,7 @@ English | [简体中文](README.zh-CN.md)
 
 ## Features
 
-- 🏢 **2.5D Pixel Agent Office** — Hides the native home greeting/logo clutter and mounts an isometric **AGENT 工作室** studio on the New Conversation page with 4 agent workstations (**Gemini**, **Claude**, **ChatGPT**, **DeepSeek**), subagent helper bots, a 3-blade corner server rack (`00N` background tasks, Colab CU readout, pixel cat eyes), and a live wall leaderboard.
+- 🏢 **2.5D Pixel Agent Office** — Hides the native home greeting/logo clutter and mounts an isometric **AGENT 工作室** studio on the New Conversation page with 3 mainstream agent workstations (**Gemini**, **Claude**, **ChatGPT**) + 1 **Open Flex Desk** (Slot 4: auto-hosts **OpenCode** or **DSH**, extensible for more agents), subagent helper bots, a 3-blade corner server rack (`00N` background tasks, Colab CU readout, pixel cat eyes), and a live wall leaderboard. Uninstalled agents gracefully degrade to clean empty desks with onboarding hints instead of idle characters (and are excluded from gong cheers and the leaderboard).
 - 🖥️ **Holographic Status Projection & One-Click Handoff** — Click an active/unread agent and they stand up pointing to a floating holographic status screen (`状态投屏`): inspect tasks, copy resume commands (`claude --resume` / `codex resume`), mark items reviewed, or hand off context directly into the Antigravity composer (click outside or press `Esc` to close; cross-agent delegated sub-tasks animate as working without polluting unread).
 - 📚 **Daily Dispatch Book Stacks** — Color-coded isometric books stacked on each desk visualize today's task dispatches by source (direct user prompts vs cross-agent dispatches, resetting daily at `00:00`).
 - 🟢 **Flicker-Free Context Remaining Ring** — Injects a clean context-remaining ring right beside the composer `+` (*Add context*) button with live draft-token estimation while typing and smooth same-frame updates.
@@ -29,13 +29,14 @@ English | [简体中文](README.zh-CN.md)
 
 ## Optional Local Integrations
 
-`agy-lite-hud` works standalone out of the box (showing a decorative pixel bar & line chart on the wall whiteboard when `howmanyusage` is not installed) and skips any missing external session source:
+`agy-lite-hud` works standalone out of the box: uninstalled agents render as clean empty desks with onboarding tips, missing external session sources are skipped silently, and the wall whiteboard shows a decorative pixel bar & line chart when `howmanyusage` is not installed:
 
 | Integration | Local Source | What It Enables |
 |---|---|---|
-| **Claude Code** | `~/.claude/projects` | Live & recent Claude sessions on the Claude desk |
-| **Codex CLI** | `~/.codex/sessions` | Live & recent Codex threads on the ChatGPT desk |
-| **DSH** | `~/.dsh` & `dsh-session-bridge` | DSH sessions on the DeepSeek desk |
+| **Claude Code** | `~/.claude/projects` | Live & recent Claude sessions on Desk 2 |
+| **Codex CLI** | `~/.codex/sessions` | Live & recent Codex threads on Desk 3 |
+| **OpenCode** | `~/.local/share/opencode/opencode.db` (or legacy `storage/session`) | Live & recent OpenCode sessions on the Open Flex Desk (Desk 4) |
+| **DSH** | `~/.dsh` & `dsh-session-bridge` | DSH sessions on the Open Flex Desk (Desk 4); auto-prioritized by recent activity when multiple Desk-4 agents exist, or pin via `AG_SLOT4_AGENT=opencode\|dsh` or the in-app pill |
 | **[HowManyUsage](https://github.com/rockcli/howmanyusage)** | `~/.config/howmanyusage/{usage-history.json,state.json}` | In-screen stamina bar, quota-exhaustion strike alerts, Colab CU on the server rack, and live wall leaderboard |
 
 > Note: The in-app Pixel Agent Office UI copy is currently in Simplified Chinese.
