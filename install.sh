@@ -12,13 +12,24 @@ if ! "$NODE_BIN" -e "if (typeof WebSocket !== 'function') process.exit(1)" 2>/de
 fi
 
 LABEL="com.local.antigravity-office"
+UID_NUM="$(id -u)"
+DOMAIN="gui/${UID_NUM}"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
 LEGACY_LABELS=("com.local.agy-lite-hud" "io.github.rock.agy-lite-hud")
 
 # Clean up legacy LaunchAgent labels if upgrading
 for old in "${LEGACY_LABELS[@]}"; do
-  launchctl bootout "gui/$(id -u)/${old}" 2>/dev/null || true
+  launchctl bootout "${DOMAIN}/${old}" 2>/dev/null || true
   rm -f "$HOME/Library/LaunchAgents/${old}.plist"
+done
+
+# Unload existing service and wait for launchd teardown before rewriting plist
+launchctl bootout "${DOMAIN}/${LABEL}" 2>/dev/null || true
+for _ in $(seq 1 25); do
+  if ! launchctl print "${DOMAIN}/${LABEL}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
 done
 
 mkdir -p "$HOME/Library/LaunchAgents"
@@ -46,6 +57,6 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
-launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+launchctl enable "${DOMAIN}/${LABEL}" 2>/dev/null || true
+launchctl bootstrap "${DOMAIN}" "$PLIST"
 echo "Installed & started ${LABEL}"
